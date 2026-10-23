@@ -141,21 +141,33 @@ external programs.
 
 ## Testing
 
-The main test suite is a corpus of Jolang programs in `tests/`. Each file starts with a header comment
-saying what should happen:
+The main test suite is a corpus of Jolang programs in `tests/corpus/`, organized into directories by
+topic. Each program says what should happen to it using comments, called directives.
+
+A program that should compile and run says what exit status it should produce, usually at the top of
+the file:
 
 ```jo
 // expect-exit: 42
 fn main() -> u8 { 42 }
 ```
 
+A program that should fail to compile marks each error it expects **on the line where the error
+occurs**. The test passes only if the compiler reports exactly those errors: each one on the right
+line, with a message containing the given text, and no others.
+
 ```jo
-// expect-error: does not fit
-fn main() -> u8 { 256 }
+fn main() -> u8 { 256 }  // expect-error: does not fit
 ```
 
-A Rust integration test compiles every file in the corpus. Files with `expect-exit` are run and their
-exit status checked; files with `expect-error` must fail to compile with an error containing the given
-text. Any change in behavior shows up as a failing test.
+A file cannot contain both kinds of directive.
+
+The test runner is [tests/corpus.rs](../tests/corpus.rs). It runs with `cargo test`, and like other
+tests can be filtered by name, for example `cargo test lexer` runs only the corpus files whose path
+contains `lexer`.
+
+**Until the compiler can build executables**, `expect-exit` programs are only run through the latest
+implemented stage, and pass if they get there without errors. The stage is a constant in the test
+runner, updated as each stage is added.
 
 Individual stages, like the lexer and parser, also get unit tests.

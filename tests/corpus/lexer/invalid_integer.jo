@@ -1,0 +1,1 @@
+fn main() -> u8 { 12x }  // expect-error: invalid integer literal `12x`

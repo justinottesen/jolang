@@ -1,0 +1,4 @@
+// Every lexing error in a file is reported, not just the first.
+fn main() -> u8 # {  // expect-error: invalid character '#'
+    ? 0  // expect-error: invalid character '?'
+}

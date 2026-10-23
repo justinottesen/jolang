@@ -1,0 +1,2 @@
+// expect-exit: 0
+fn main() -> u8 { 0 }
