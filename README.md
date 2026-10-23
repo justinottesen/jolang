@@ -8,7 +8,7 @@ sacrificing low level hardware control. It takes heavy inspiration from C, C++, 
 main goal of this project is learning, the outcome of a usable language is a side effect.
 
 Some properties I want the resulting language to have:
-- **Explicit** - Everything programs in the langauge do should be clear to the programmer. No
+- **Explicit** - Everything programs in the language do should be clear to the programmer. No
   garbage collection pauses, hidden heap allocations, implicit destructors, operator overloading,
   etc.
 - **Safety** - Programs that successfully compile shouldn't break any invariants the writer expects
