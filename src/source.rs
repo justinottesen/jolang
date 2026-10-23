@@ -12,6 +12,13 @@ pub struct Span {
     pub end: u32,
 }
 
+impl Span {
+    /// Returns a span from the start of `self` to the end of `other`.
+    pub fn to(self, other: Span) -> Span {
+        Span { file: self.file, start: self.start, end: other.end }
+    }
+}
+
 pub struct SourceFile {
     pub path: String,
     pub text: String,

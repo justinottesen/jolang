@@ -1,21 +1,26 @@
+mod ast;
 mod diagnostic;
 mod lexer;
+mod parser;
 mod source;
 
 use std::process::ExitCode;
 
 use diagnostic::Diagnostic;
+use lexer::Token;
 use source::SourceMap;
 
 const USAGE: &str = "\
 usage: jolang <file.jo> -o <output>
        jolang <file.jo> --emit=<stage>
 
-stages: tokens";
+stages: tokens, ast";
 
 /// A pipeline stage whose output can be printed with `--emit`.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
     Tokens,
+    Ast,
 }
 
 enum Output {
@@ -30,6 +35,12 @@ struct Options {
     output: Output,
 }
 
+impl Options {
+    fn emits(&self, stage: Stage) -> bool {
+        matches!(self.output, Output::Emit(emit) if emit == stage)
+    }
+}
+
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut input = None;
     let mut output = None;
@@ -41,6 +52,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options, String>
         } else if let Some(stage) = arg.strip_prefix("--emit=") {
             let stage = match stage {
                 "tokens" => Stage::Tokens,
+                "ast" => Stage::Ast,
                 _ => return Err(format!("unknown stage `{stage}`")),
             };
             Output::Emit(stage)
@@ -88,22 +100,32 @@ fn compile(options: &Options) -> Result<(), ()> {
     let mut sources = SourceMap::default();
     let file = sources.add(options.input.clone(), text).map_err(|message| eprintln!("error: {message}"))?;
 
-    let (tokens, diagnostics) = lexer::lex(file, &sources.get(file).text);
+    let text = &sources.get(file).text;
+
+    let (tokens, diagnostics) = lexer::lex(file, text);
     report(&diagnostics, &sources)?;
-    match &options.output {
-        Output::Emit(Stage::Tokens) => {
-            for token in &tokens {
-                let (line, column) = sources.get(file).line_col(token.span.start);
-                let location = format!("{line}:{column}");
-                let kind = format!("{:?}", token.kind);
-                println!("{location:<8} {kind:<8} {:?}", sources.text(token.span));
-            }
-            Ok(())
-        }
-        Output::Executable(path) => {
-            eprintln!("error: cannot build `{path}`: building executables is not implemented yet");
-            Err(())
-        }
+    if options.emits(Stage::Tokens) {
+        print_tokens(&tokens, &sources);
+        return Ok(());
+    }
+
+    let ast = parser::parse(&tokens, text).map_err(|diagnostic| eprint!("{}", diagnostic.render(&sources)))?;
+    if options.emits(Stage::Ast) {
+        print!("{}", ast.dump(&sources));
+        return Ok(());
+    }
+
+    let Output::Executable(path) = &options.output else { unreachable!("every stage is emitted above") };
+    eprintln!("error: cannot build `{path}`: building executables is not implemented yet");
+    Err(())
+}
+
+fn print_tokens(tokens: &[Token], sources: &SourceMap) {
+    for token in tokens {
+        let (line, column) = sources.get(token.span.file).line_col(token.span.start);
+        let location = format!("{line}:{column}");
+        let kind = format!("{:?}", token.kind);
+        println!("{location:<8} {kind:<8} {:?}", sources.text(token.span));
     }
 }
 

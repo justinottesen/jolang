@@ -1,0 +1,3 @@
+// Parsing stops at the first error, so the second function is not reported.
+fn main( -> u8 { 0 }  // expect-error: expected `)`, found `->`
+fn () -> u8 { 0 }

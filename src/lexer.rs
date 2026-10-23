@@ -22,6 +22,23 @@ pub enum TokenKind {
     Eof,
 }
 
+impl TokenKind {
+    /// Describes this kind of token, for error messages.
+    pub fn describe(self) -> &'static str {
+        match self {
+            TokenKind::Fn => "`fn`",
+            TokenKind::Ident => "identifier",
+            TokenKind::Integer => "integer",
+            TokenKind::LParen => "`(`",
+            TokenKind::RParen => "`)`",
+            TokenKind::LBrace => "`{`",
+            TokenKind::RBrace => "`}`",
+            TokenKind::Arrow => "`->`",
+            TokenKind::Eof => "end of file",
+        }
+    }
+}
+
 /// A token stores only its kind and location. Its text can be recovered from the source.
 #[derive(Clone, Copy, Debug)]
 pub struct Token {

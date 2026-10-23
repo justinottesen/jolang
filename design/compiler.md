@@ -38,6 +38,10 @@ reports an error and keeps going, so one typo doesn't hide others.
 The parser builds the AST, recording a span on every node. For now it stops at the first syntax
 error; error recovery can come later.
 
+Errors are phrased as `expected <what the grammar needs>, found <the actual token>`. When the parser
+runs out of input, the error points just after the last token rather than at the end of the file,
+since that is where the missing code belongs.
+
 The parser accepts more than the language allows (see the grammar in [language.md](language.md)).
 Rules like "exactly one function, named `main`" are the checker's job.
 

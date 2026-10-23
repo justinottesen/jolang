@@ -1,0 +1,1 @@
+fn () -> u8 { 0 }  // expect-error: expected function name, found `(`
