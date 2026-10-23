@@ -7,6 +7,8 @@ use crate::source::{FileId, Span};
 pub enum TokenKind {
     // Keywords
     Fn,
+    Let,
+    Mut,
 
     Ident,
     Integer,
@@ -17,6 +19,9 @@ pub enum TokenKind {
     LBrace,
     RBrace,
     Arrow,
+    Semicolon,
+    Colon,
+    Eq,
 
     /// Marks the end of the file. Always the last token.
     Eof,
@@ -27,6 +32,8 @@ impl TokenKind {
     pub fn describe(self) -> &'static str {
         match self {
             TokenKind::Fn => "`fn`",
+            TokenKind::Let => "`let`",
+            TokenKind::Mut => "`mut`",
             TokenKind::Ident => "identifier",
             TokenKind::Integer => "integer",
             TokenKind::LParen => "`(`",
@@ -34,6 +41,9 @@ impl TokenKind {
             TokenKind::LBrace => "`{`",
             TokenKind::RBrace => "`}`",
             TokenKind::Arrow => "`->`",
+            TokenKind::Semicolon => "`;`",
+            TokenKind::Colon => "`:`",
+            TokenKind::Eq => "`=`",
             TokenKind::Eof => "end of file",
         }
     }
@@ -74,6 +84,9 @@ impl Lexer<'_> {
                 b'{' => self.punctuation(TokenKind::LBrace, 1),
                 b'}' => self.punctuation(TokenKind::RBrace, 1),
                 b'-' if self.peek(1) == Some(b'>') => self.punctuation(TokenKind::Arrow, 2),
+                b';' => self.punctuation(TokenKind::Semicolon, 1),
+                b':' => self.punctuation(TokenKind::Colon, 1),
+                b'=' => self.punctuation(TokenKind::Eq, 1),
                 b'0'..=b'9' => self.integer(start),
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.ident_or_keyword(start),
                 _ => self.invalid_character(start),
@@ -131,6 +144,8 @@ impl Lexer<'_> {
         self.eat_while(is_ident_continue);
         let kind = match &self.text[start..self.pos] {
             "fn" => TokenKind::Fn,
+            "let" => TokenKind::Let,
+            "mut" => TokenKind::Mut,
             _ => TokenKind::Ident,
         };
         self.push(kind, start);
@@ -180,6 +195,16 @@ mod tests {
         let (tokens, _, sources) = lex_str("fn main() -> u8 { 42 }");
         let texts: Vec<&str> = tokens.iter().map(|t| sources.text(t.span)).collect();
         assert_eq!(texts, ["fn", "main", "(", ")", "->", "u8", "{", "42", "}", ""]);
+    }
+
+    #[test]
+    fn let_statement() {
+        use TokenKind::*;
+        assert_eq!(
+            kinds("let mut x: u8 = 1; x = y;"),
+            [Let, Mut, Ident, Colon, Ident, Eq, Integer, Semicolon, Ident, Eq, Ident, Semicolon, Eof]
+        );
+        assert_eq!(kinds("letter mutable"), [Ident, Ident, Eof]);
     }
 
     #[test]

@@ -1,0 +1,3 @@
+fn main() -> u8 {
+    y  // expect-error: undefined variable `y`
+}

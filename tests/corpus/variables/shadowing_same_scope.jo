@@ -1,0 +1,5 @@
+fn main() -> u8 {
+    let x: u8 = 1;
+    let x: u8 = 2;  // expect-error: `x` is already defined; shadowing is not allowed
+    x
+}

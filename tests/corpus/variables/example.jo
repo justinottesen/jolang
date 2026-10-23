@@ -1,0 +1,12 @@
+// expect-exit: 40
+// The example from design/language.md.
+fn main() -> u8 {
+    let x: u8 = 40;
+    let y = x;           // the type of `y` comes from `x`
+    let mut z: u8 = 1;
+    z = y;
+    {
+        let inner: u8 = z;
+        inner
+    }
+}

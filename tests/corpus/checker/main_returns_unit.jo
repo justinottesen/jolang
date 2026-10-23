@@ -1,0 +1,1 @@
+fn main() -> () { }  // expect-error: `main` must return `u8`, not `()`

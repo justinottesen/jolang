@@ -1,0 +1,5 @@
+// Integer literals have no type of their own.
+fn main() -> u8 {
+    let x = 5;  // expect-error: cannot infer the type of integer `5`
+    x
+}

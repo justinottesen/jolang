@@ -135,8 +135,10 @@ fn compile(options: &Options) -> Result<(), ()> {
     }
 
     let mut symbols = Interner::default();
-    let hir = checker::check(&ast, file, &sources, &mut symbols)
-        .map_err(|diagnostics| print_diagnostics(&diagnostics, &sources))?;
+    // The checker can report warnings even when it succeeds.
+    let (hir, diagnostics) = checker::check(&ast, file, &sources, &mut symbols);
+    print_diagnostics(&diagnostics, &sources);
+    let hir = hir.ok_or(())?;
     if options.emits(Stage::Hir) {
         print!("{}", hir.dump(&sources, &symbols));
         return Ok(());

@@ -33,6 +33,8 @@ impl Local {
 #[derive(Clone, Copy, Debug)]
 pub struct LocalDecl {
     pub ty: Type,
+    /// The variable this local holds, or `None` for the return value and temporaries.
+    pub name: Option<Symbol>,
 }
 
 pub struct Block {
@@ -56,6 +58,9 @@ pub struct Place {
 #[derive(Clone, Copy, Debug)]
 pub enum Operand {
     Constant { value: u128, ty: Type },
+    /// The value in a place, which is left unchanged. Moving a value out of a place, which linear
+    /// types will need, will be a separate operand.
+    Copy(Place),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,7 +77,10 @@ impl Ir {
             let return_type = function.locals[Local::RETURN.0 as usize].ty;
             writeln!(out, "fn {}() -> {return_type} {{", symbols.get(function.name)).unwrap();
             for (i, local) in function.locals.iter().enumerate() {
-                writeln!(out, "    let _{i}: {}", local.ty).unwrap();
+                match local.name {
+                    Some(name) => writeln!(out, "    let _{i}: {}  // {}", local.ty, symbols.get(name)).unwrap(),
+                    None => writeln!(out, "    let _{i}: {}", local.ty).unwrap(),
+                }
             }
             for (i, block) in function.blocks.iter().enumerate() {
                 writeln!(out, "  bb{i}:").unwrap();
@@ -100,5 +108,6 @@ fn dump_place(place: Place) -> String {
 fn dump_operand(operand: Operand) -> String {
     match operand {
         Operand::Constant { value, ty } => format!("const {value}_{ty}"),
+        Operand::Copy(place) => format!("copy {}", dump_place(place)),
     }
 }

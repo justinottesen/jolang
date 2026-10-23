@@ -1,4 +1,4 @@
 // An error at the end of the file points just after the last token.
-fn main() -> u8 { 0  // expect-error: expected `}`, found end of file
+fn main() -> u8 { 0  // expect-error: expected `;` or `}`, found end of file
 
 

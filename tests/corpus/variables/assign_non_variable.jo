@@ -1,0 +1,4 @@
+fn main() -> u8 {
+    5 = 3;  // expect-error: only variables can be assigned to
+    0
+}

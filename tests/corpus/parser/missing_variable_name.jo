@@ -1,0 +1,4 @@
+fn main() -> u8 {
+    let = 5;  // expect-error: expected variable name, found `=`
+    0
+}

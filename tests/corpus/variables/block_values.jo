@@ -1,0 +1,15 @@
+// expect-exit: 12
+// Blocks are expressions, and their variables go out of scope at the end.
+fn main() -> u8 {
+    let a: u8 = {
+        let b: u8 = 12;
+        b
+    };
+    let mut c: u8 = 0;
+    {
+        let d: u8 = a;
+        c = d;
+    }
+    { c = { a } }
+    c
+}

@@ -1,0 +1,6 @@
+// A value that isn't `()` can't be silently discarded.
+fn main() -> u8 {
+    let x: u8 = 1;
+    x;  // expect-error: unused value of type `u8`
+    x
+}

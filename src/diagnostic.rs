@@ -4,7 +4,10 @@ use crate::source::{SourceMap, Span};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
+    /// The program is invalid, and compilation stops.
     Error,
+    /// The program is valid but probably contains a mistake. Compilation continues.
+    Warning,
 }
 
 #[derive(Clone, Debug)]
@@ -17,6 +20,10 @@ pub struct Diagnostic {
 impl Diagnostic {
     pub fn error(message: impl Into<String>, span: Span) -> Self {
         Diagnostic { severity: Severity::Error, message: message.into(), span }
+    }
+
+    pub fn warning(message: impl Into<String>, span: Span) -> Self {
+        Diagnostic { severity: Severity::Warning, message: message.into(), span }
     }
 
     /// Formats the diagnostic with the source line it points at, for example:
@@ -35,6 +42,7 @@ impl Diagnostic {
 
         let severity = match self.severity {
             Severity::Error => "error",
+            Severity::Warning => "warning",
         };
         let line_number = line.to_string();
         let gutter = " ".repeat(line_number.len());

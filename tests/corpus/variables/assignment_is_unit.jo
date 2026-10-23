@@ -1,0 +1,8 @@
+// Assignment has type `()`, so it can't be used as a number.
+fn main() -> u8 {
+    let mut x: u8 = 0;
+    let mut y: u8 = 0;
+    x = y = 5;  // expect-error: expected `u8`, found `()`
+    y = x;
+    y
+}

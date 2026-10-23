@@ -1,0 +1,7 @@
+// expect-exit: 0
+// Assigning to a variable doesn't count as reading it.
+fn main() -> u8 {
+    let mut x: u8 = 1;  // expect-warning: unused variable `x`
+    x = 2;
+    0
+}

@@ -38,9 +38,15 @@ reports an error and keeps going, so one typo doesn't hide others.
 The parser builds the AST, recording a span on every node. For now it stops at the first syntax
 error; error recovery can come later.
 
-Errors are phrased as `expected <what the grammar needs>, found <the actual token>`. When the parser
-runs out of input, the error points just after the last token rather than at the end of the file,
-since that is where the missing code belongs.
+Errors are phrased as `expected <what the grammar needs>, found <the actual token>`. The error
+points at the unexpected token, unless that token is on a later line or is the end of the file. In
+those cases it points just after the previous token, since that is where the missing code belongs:
+a forgotten `;` at the end of a line is reported at the end of that line, not at the start of the
+next.
+
+Inside a block, an expression followed by `}` is the block's final expression; followed by `;` it
+is a statement. A block at the start of a statement always ends the statement, so `{ ... } = 1`
+does not parse as an assignment. Rust parses it the same way.
 
 The parser accepts more than the language allows (see the grammar in [language.md](language.md)).
 Rules like "exactly one function, named `main`" are the checker's job.
@@ -62,8 +68,12 @@ stages can assume it is valid.
 - *Checking*: the context says what type an expression must have, and the expression is checked
   against it. A function body is checked against the declared return type; an untyped integer
   literal gets its type this way.
-- *Inference*: the expression's type is computed from its parts, bottom-up. For example, a variable
-  reference has the type of the variable. Nothing in the current slice needs this yet.
+- *Inference*: the expression's type is computed from its parts, bottom-up. A variable reference has
+  the type of the variable, and an assignment has type `()`. A `let` without a type annotation
+  infers its initializer.
+
+Checking an expression that has no special checking rule falls back to inferring its type and
+comparing it with the expected one.
 
 An untyped literal with no context to check it against is an error. The alternative design is
 Rust-style inference, where the checker creates unknown types and solves for them using
@@ -77,8 +87,22 @@ errors. In the code, a function that has reported an error returns a `Reported` 
 result, which tells its callers an error has already been reported and what depends on it should be
 skipped.
 
+A variable whose declaration failed (for example, `let x = 5;`, whose type can't be inferred) is
+still put in scope, but marked as *poisoned*. Using it later is skipped silently instead of
+reporting "undefined variable", since the real problem was already reported.
+
+**Scopes** are a stack of name-to-variable maps, one per block. Looking up a name searches from the
+innermost scope out. Because shadowing is not allowed, declaring a name that is found anywhere in
+the stack is an error.
+
+**Warnings** for unused variables, and `mut` variables never assigned to, are reported when a
+variable's scope ends, using usage flags recorded as the block was checked. A program with only
+warnings still compiles. The checker sorts all its diagnostics by position before returning them,
+since warnings are found after the errors inside their scope.
+
 Names are interned: each distinct identifier is stored once, and the HIR refers to it by a `Symbol`
-id.
+id. Each HIR function lists every local variable declared in it, and expressions refer to them by
+index.
 
 ### Lowering (HIR -> IR)
 
@@ -114,8 +138,23 @@ SSA is much better for optimization. When generated code quality starts to matte
 added as a new stage between this IR and codegen, the same split Rust makes between MIR and LLVM.
 
 Lowering uses *destination passing*: an expression is lowered along with the place its value should
-be stored in. A function body is lowered into `_0`, and a block passes its destination on to its
-final expression. This avoids creating a temporary for every intermediate value.
+be stored in. A function body is lowered into `_0`, a `let` lowers its initializer into the
+variable's local, and a block passes its destination on to its final expression. This avoids
+creating a temporary for every intermediate value. An expression statement is lowered with no
+destination, since its value (always `()`) is discarded.
+
+Each HIR variable becomes an IR local, after `_0`. Reading a variable is a `copy` operand. Rust's
+MIR also has a `move` operand, which leaves the source unusable; linear types will need it, but
+every type can be freely copied so far.
+
+Assignment is the one place destination passing needs care, because the target already holds a
+value the right-hand side might read. A constant or a variable is stored into the target directly.
+Anything else (for now, a block) is evaluated into a fresh temporary first and then copied, so the
+target never holds a half-computed value while the right-hand side is still running. With
+multi-statement values like struct literals, writing directly into the target could otherwise read
+fields that have already been overwritten.
+
+Values of type `()` carry no data, so storing one does nothing, and their locals take no space.
 
 ### Codegen and printing
 
@@ -142,6 +181,9 @@ main:
     pop rbp
     ret
 ```
+
+x86 can't move directly from memory to memory, so `_1 = copy _2` becomes a load into `rax` and a
+store from it. Locals of type `()` get no slot at all.
 
 The frame size is rounded up to a multiple of 16, so `rsp` stays aligned as the System V ABI
 requires at calls. Better code comes later, from the SSA stage and a real register allocator.
@@ -237,7 +279,20 @@ line, with a message containing the given text, and no others.
 fn main() -> u8 { 256 }  // expect-error: does not fit
 ```
 
-A file cannot contain both kinds of directive.
+Warnings are marked the same way, with `expect-warning`. Since warnings don't stop compilation,
+they can appear in programs that also use `expect-exit`:
+
+```jo
+// expect-exit: 0
+fn main() -> u8 {
+    let x: u8 = 1;  // expect-warning: unused variable `x`
+    0
+}
+```
+
+Every program's diagnostics must match its directives exactly, so an unexpected warning fails the
+test too. A file cannot contain both `expect-exit` and `expect-error`. Each line can only hold one
+directive, so a test shouldn't produce two diagnostics on the same line.
 
 The test runner is [tests/corpus.rs](../tests/corpus.rs). It runs with `cargo test`, and like other
 tests can be filtered by name, for example `cargo test lexer` runs only the corpus files whose path

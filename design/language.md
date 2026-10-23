@@ -32,6 +32,14 @@ Some external systems expect null-terminated data, such as Linux syscalls that t
 program arguments the kernel passes at startup. Converting to and from slices at those boundaries is
 the job of library code, and it happens explicitly. The language itself never assumes a terminator.
 
+### Safe defaults
+
+When there is a choice, the default is the safer option, and the less safe one must be asked for
+explicitly. Variables are immutable unless declared `mut`; a value can't be silently discarded.
+
+Where it's unclear whether to allow something, start strict. Relaxing a rule later breaks no
+existing code; tightening one does.
+
 ### Fast to compile
 
 Compile time is a first-class concern, even though the bootstrap compiler doesn't optimize for it.
@@ -44,11 +52,20 @@ Language features should not make fast or incremental compilation impossible. In
 
 ## Current Slice
 
-For now, the language is incredibly simple. A program is a single function, `main`, which returns a
-constant exit status.
+For now, the language is very small. A program is a single function, `main`, which returns the
+process's exit status. Its body can use local variables, assignment, and nested blocks.
 
 ```jo
-fn main() -> u8 { 0 }
+fn main() -> u8 {
+    let x: u8 = 40;
+    let y = x;           // the type of `y` comes from `x`
+    let mut z: u8 = 1;
+    z = y;
+    {
+        let inner: u8 = z;
+        inner
+    }
+}
 ```
 
 ### Lexical structure
@@ -60,9 +77,9 @@ Source files are UTF-8, using the `.jo` extension.
 | Whitespace  | Space, tab, `\n`, `\r`. Not significant.                       |
 | Comment     | `//` to the end of the line.                                   |
 | Identifier  | `[A-Za-z_][A-Za-z0-9_]*` (ASCII only for now).                 |
-| Keyword     | `fn`                                                           |
+| Keyword     | `fn` `let` `mut`                                               |
 | Integer     | `[0-9]+` (decimal only for now).                               |
-| Punctuation | `(` `)` `{` `}` `->`                                           |
+| Punctuation | `(` `)` `{` `}` `->` `;` `:` `=`                               |
 
 Type names such as `u8` are ordinary identifiers that resolve to built-in types, not keywords. This
 keeps built-in and user-defined types uniform, and lets new types be added without touching the
@@ -73,38 +90,83 @@ lexer.
 ```ebnf
 file     = fn_decl* ;
 fn_decl  = "fn" IDENT "(" ")" "->" type block ;
-type     = IDENT ;
-block    = "{" expr "}" ;
-expr     = INTEGER ;
+type     = IDENT | "(" ")" ;
+block    = "{" stmt* expr? "}" ;
+stmt     = "let" "mut"? IDENT ( ":" type )? "=" expr ";"
+         | expr ";"
+         | block ;                       (* a block-like expression needs no `;` *)
+expr     = primary ( "=" expr )? ;       (* assignment *)
+primary  = INTEGER | IDENT | block ;
 ```
 
 The grammar accepts more than the language allows (any number of functions, any name, any type
-name). Those restrictions are checked after parsing, so they can produce specific error messages.
+name, assigning to things that aren't variables). Those restrictions are checked after parsing, so
+they can produce specific error messages.
 
 ### Semantics
 
-**Blocks are expressions.** A block evaluates to the value of its final expression. A function's
-body is a block, and its value is the function's return value. In this slice, a block contains
-exactly one expression.
+**Almost everything is an expression.** Following Rust, the only statements are `let` and
+expression statements; everything else, including assignment, is an expression with a type and a
+value. `let` has to be a statement, because the name it introduces stays visible for the rest of
+the block.
+
+**Blocks are expressions.** A block is a list of statements, optionally followed by a final
+expression. Its value is the value of the final expression, or `()` if there isn't one. A
+function's body is a block, and its value is the function's return value.
+
+**The unit type `()`** has exactly one value and carries no information. It is the type of
+expressions that are run only for their effect, like assignment, and of blocks without a final
+expression.
+
+**Values can't be silently discarded.** An expression statement (`expr;`) must have type `()`.
+Discarding any other value is an error, since silently ignoring a result is a common source of bugs.
+A way to discard a value on purpose (likely `_ = expr;`) will come with function calls, when it
+becomes useful.
+
+**Block-like expressions don't need `;`.** An expression ending in a block (for now, just a block;
+later `if`, `while`, and so on) can be used as a statement without a trailing `;`, as long as its
+type is `()`. Otherwise every `if` used as a statement would need `};` after it.
+
+**Variables** are declared with `let`, and are immutable unless declared `let mut`. Every `let`
+must have an initializer. The type annotation is optional: without one, the variable gets the type
+of its initializer. A variable is in scope from the end of its `let` statement to the end of the
+enclosing block.
+
+**Shadowing is not allowed.** A variable can't have the same name as another variable that is in
+scope, in the same block or an enclosing one. A name always refers to one thing.
+
+**Assignment** (`x = value`) is an expression of type `()`. Its left side must be a variable
+declared `mut`. Because its type is `()`, mistakes like `x = y = 5` are type errors.
 
 **Integer literals are untyped.** An integer literal is a constant with no fixed type, and takes its
-type from context. Using it where no type can be determined is an error, and so is a value that
-doesn't fit the type it's given. In this slice, the only context is the function's return type.
+type from context: a variable's type annotation, the variable being assigned to, or a function's
+return type. Using a literal where no type can be determined is an error (for example,
+`let x = 5;`), and so is a value that doesn't fit the type it's given.
 
 **`main` returns the process exit status.** The program must contain exactly one function, named
 `main`, which takes no parameters and returns `u8`. Its return value becomes the process's exit
 status. `u8` is used because Linux only keeps the low 8 bits of an exit status, and silently
 truncating a wider value would be a hidden behavior.
 
-**Built-in types.** The only type is `u8`, an unsigned 8-bit integer.
+**Built-in types.** `u8`, an unsigned 8-bit integer, and `()`.
 
-### Errors
+### Errors and warnings
 
 The following are compile errors in this slice:
 
 - A program with no `main`, more than one function, or a function not named `main`.
-- A return type other than `u8`, or a type name that doesn't exist.
-- An integer literal that doesn't fit in its type (for example, `256` as a `u8`).
+- A return type other than `u8` for `main`, or a type name that doesn't exist.
+- An integer literal that doesn't fit in its type (for example, `256` as a `u8`), or whose type
+  can't be determined.
+- A type mismatch, such as a block with no final expression where a `u8` is expected.
+- An expression statement whose type isn't `()`.
+- Using a variable that isn't defined, or defining a variable whose name is already in scope.
+- Assigning to a variable not declared `mut`, or to something that isn't a variable.
+
+Warnings don't stop compilation. They flag code that is legal but probably a mistake:
+
+- A variable that is never read.
+- A variable declared `mut` that is never assigned to.
 
 ## Future Direction
 

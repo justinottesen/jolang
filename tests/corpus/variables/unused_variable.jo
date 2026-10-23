@@ -1,0 +1,6 @@
+// expect-exit: 0
+// Warnings don't stop the program from compiling.
+fn main() -> u8 {
+    let x: u8 = 1;  // expect-warning: unused variable `x`
+    0
+}

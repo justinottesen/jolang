@@ -1,0 +1,12 @@
+// expect-exit: 2
+// Once a variable's scope ends, its name can be used again.
+fn main() -> u8 {
+    let mut total: u8 = 0;
+    {
+        let x: u8 = 1;
+        total = x;
+    }
+    let x: u8 = 2;
+    total = x;
+    total
+}

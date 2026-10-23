@@ -1,1 +1,1 @@
-fn main() -> u8 { 0 1 }  // expect-error: expected `}`, found integer `1`
+fn main() -> u8 { 0 1 }  // expect-error: expected `;` or `}`, found integer `1`

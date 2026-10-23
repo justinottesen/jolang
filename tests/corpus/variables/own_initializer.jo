@@ -1,0 +1,6 @@
+// A variable isn't in scope in its own initializer.
+fn main() -> u8 {
+    let x: u8 =
+        x;  // expect-error: undefined variable `x`
+    x
+}

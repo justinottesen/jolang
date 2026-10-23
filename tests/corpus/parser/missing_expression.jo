@@ -1,1 +1,4 @@
-fn main() -> u8 { }  // expect-error: expected expression, found `}`
+fn main() -> u8 {
+    let x: u8 = ;  // expect-error: expected expression, found `;`
+    x
+}

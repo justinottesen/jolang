@@ -1,0 +1,5 @@
+// expect-exit: 1
+fn main() -> u8 {
+    let mut x: u8 = 1;  // expect-warning: variable `x` is declared `mut` but never assigned to
+    x
+}

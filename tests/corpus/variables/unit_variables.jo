@@ -1,0 +1,9 @@
+// expect-exit: 9
+// Assignment has type `()`, which can be stored in a variable like any other value.
+fn main() -> u8 {
+    let mut x: u8 = 0;
+    let unit: () = x = 9;
+    let also_unit = unit;
+    also_unit;
+    x
+}
