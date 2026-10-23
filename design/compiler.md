@@ -83,14 +83,39 @@ id.
 ### Lowering (HIR -> IR)
 
 The IR represents each function as a control-flow graph: a set of basic blocks, each a straight-line
-list of operations ending in a terminator (`return`, a jump, a branch). In this slice every function
-is a single block ending in `return <constant>`, but the shape is the one later analyses need.
-Ownership and linear-type checking will run on this representation, because it makes every
-possible path through a function explicit.
+list of statements ending in a terminator (`return`, a jump, a branch). Ownership and linear-type
+checking will run on this representation, because it makes every possible path through a function
+explicit.
 
-**Open question:** whether the IR is in SSA form (every value assigned exactly once) or built on
-named locals and memory locations, like Rust's MIR. This affects how ownership analysis is written.
-Nothing in the current slice forces the decision.
+**The IR is built on places, like Rust's MIR.** Each function has a list of *locals*: typed storage
+slots, standing for variables and temporaries. Statements assign values to *places*: a local, or
+eventually part of one (a field, the target of a pointer, an array element). A place can be
+assigned more than once. By convention, local `_0` holds the function's return value, so
+`return` takes no operand.
+
+```
+fn main() -> u8 {
+    let _0: u8
+  bb0:
+    _0 = const 42_u8
+    return
+}
+```
+
+This was chosen over SSA (every value defined exactly once, as in LLVM) because:
+
+- Linear types are a question about places: "on every path to the end of the scope, was the
+  resource in `x` consumed?" On this IR that is a standard dataflow analysis, and its errors can
+  refer to things the user wrote.
+- Lowering the HIR to places is straightforward, as is naive codegen that gives every local a
+  stack slot.
+
+SSA is much better for optimization. When generated code quality starts to matter, an SSA IR will be
+added as a new stage between this IR and codegen, the same split Rust makes between MIR and LLVM.
+
+Lowering uses *destination passing*: an expression is lowered along with the place its value should
+be stored in. A function body is lowered into `_0`, and a block passes its destination on to its
+final expression. This avoids creating a temporary for every intermediate value.
 
 ### Codegen and printing
 

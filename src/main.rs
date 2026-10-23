@@ -3,7 +3,9 @@ mod checker;
 mod diagnostic;
 mod hir;
 mod intern;
+mod ir;
 mod lexer;
+mod lower;
 mod parser;
 mod source;
 
@@ -17,7 +19,7 @@ const USAGE: &str = "\
 usage: jolang <file.jo> -o <output>
        jolang <file.jo> --emit=<stage>
 
-stages: tokens, ast, hir";
+stages: tokens, ast, hir, ir";
 
 /// A pipeline stage whose output can be printed with `--emit`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -25,6 +27,7 @@ enum Stage {
     Tokens,
     Ast,
     Hir,
+    Ir,
 }
 
 enum Output {
@@ -58,6 +61,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options, String>
                 "tokens" => Stage::Tokens,
                 "ast" => Stage::Ast,
                 "hir" => Stage::Hir,
+                "ir" => Stage::Ir,
                 _ => return Err(format!("unknown stage `{stage}`")),
             };
             Output::Emit(stage)
@@ -126,6 +130,12 @@ fn compile(options: &Options) -> Result<(), ()> {
     let hir = checker::check(&ast, file, &sources).map_err(|diagnostics| print_diagnostics(&diagnostics, &sources))?;
     if options.emits(Stage::Hir) {
         print!("{}", hir.dump(&sources));
+        return Ok(());
+    }
+
+    let ir = lower::lower(&hir);
+    if options.emits(Stage::Ir) {
+        print!("{}", ir.dump(&hir.symbols));
         return Ok(());
     }
 
