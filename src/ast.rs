@@ -98,11 +98,9 @@ impl Ast {
     }
 }
 
-/// Writes one node as `<label> (<start line>:<column>-<end line>:<column>)`, indented by depth.
+/// Writes one node as `<label> (<span location>)`, indented by depth.
 fn dump_line(out: &mut String, depth: usize, label: &str, span: Span, sources: &SourceMap) {
-    let file = sources.get(span.file);
-    let (start_line, start_column) = file.line_col(span.start);
-    let (end_line, end_column) = file.line_col(span.end);
+    let location = sources.span_location(span);
     let indent = depth * 2;
-    writeln!(out, "{:indent$}{label} ({start_line}:{start_column}-{end_line}:{end_column})", "").unwrap();
+    writeln!(out, "{:indent$}{label} ({location})", "").unwrap();
 }

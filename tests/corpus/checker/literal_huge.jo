@@ -1,0 +1,2 @@
+// Too large for any integer type the compiler could represent.
+fn main() -> u8 { 99999999999999999999999999999999999999999999999999 }  // expect-error: does not fit in `u8`

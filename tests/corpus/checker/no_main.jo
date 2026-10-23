@@ -1,0 +1,2 @@
+// expect-error: no `main` function
+// (The error points at the start of the file.)

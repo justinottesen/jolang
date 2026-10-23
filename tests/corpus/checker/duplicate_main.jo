@@ -1,0 +1,2 @@
+fn main() -> u8 { 0 }
+fn main() -> u8 { 1 }  // expect-error: `main` is defined more than once

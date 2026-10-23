@@ -1,0 +1,3 @@
+// expect-exit: 255
+// The largest value that fits in `u8`.
+fn main() -> u8 { 255 }

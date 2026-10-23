@@ -54,7 +54,31 @@ types.
 
 The checker builds a new tree rather than annotating the AST, so that later stages never deal with
 raw syntax. As the language grows, sugar (convenient syntax that is shorthand for something
-simpler) will be removed at this stage.
+simpler) will be removed at this stage. A HIR only exists for a program with no errors, so later
+stages can assume it is valid.
+
+**Type checking is bidirectional.** Types flow in two directions:
+
+- *Checking*: the context says what type an expression must have, and the expression is checked
+  against it. A function body is checked against the declared return type; an untyped integer
+  literal gets its type this way.
+- *Inference*: the expression's type is computed from its parts, bottom-up. For example, a variable
+  reference has the type of the variable. Nothing in the current slice needs this yet.
+
+An untyped literal with no context to check it against is an error. The alternative design is
+Rust-style inference, where the checker creates unknown types and solves for them using
+constraints from across the whole function. That can infer more, but a type may then depend on code
+far from where it's used. Bidirectional checking keeps every type determined by nearby code, which
+fits the explicitness goal and keeps it cheap for tools to show inferred types.
+
+**The checker reports every error it can**, unlike the parser. When a part of the program fails to
+check, the code that depends on it is skipped, so one mistake doesn't cause a cascade of follow-on
+errors. In the code, a function that has reported an error returns a `Reported` value instead of a
+result, which tells its callers an error has already been reported and what depends on it should be
+skipped.
+
+Names are interned: each distinct identifier is stored once, and the HIR refers to it by a `Symbol`
+id.
 
 ### Lowering (HIR -> IR)
 

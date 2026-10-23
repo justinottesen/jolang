@@ -1,0 +1,5 @@
+// Unlike the parser, the checker reports every error it finds.
+fn main() -> i32 { 0 }  // expect-error: unknown type `i32`
+fn other() -> u8 {  // expect-error: functions other than `main` are not supported yet
+    300  // expect-error: `300` does not fit in `u8`
+}

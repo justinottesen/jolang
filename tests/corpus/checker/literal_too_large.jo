@@ -1,0 +1,1 @@
+fn main() -> u8 { 256 }  // expect-error: `256` does not fit in `u8` (range 0 to 255)

@@ -1,0 +1,2 @@
+fn main() -> u8 { 0 }
+fn helper() -> u8 { 1 }  // expect-error: functions other than `main` are not supported yet

@@ -84,6 +84,14 @@ impl SourceMap {
     pub fn text(&self, span: Span) -> &str {
         &self.get(span.file).text[span.start as usize..span.end as usize]
     }
+
+    /// Formats a span as `<start line>:<column>-<end line>:<column>`, for debugging output.
+    pub fn span_location(&self, span: Span) -> String {
+        let file = self.get(span.file);
+        let (start_line, start_column) = file.line_col(span.start);
+        let (end_line, end_column) = file.line_col(span.end);
+        format!("{start_line}:{start_column}-{end_line}:{end_column}")
+    }
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use std::process::{Command, ExitCode};
 
 /// Until the compiler can build executables, programs are only run through the pipeline up to this
 /// stage. `expect-exit` programs pass if they get there without errors.
-const LAST_STAGE: &str = "ast";
+const LAST_STAGE: &str = "hir";
 
 const COMPILER: &str = env!("CARGO_BIN_EXE_jolang");
 

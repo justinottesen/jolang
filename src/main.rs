@@ -1,5 +1,8 @@
 mod ast;
+mod checker;
 mod diagnostic;
+mod hir;
+mod intern;
 mod lexer;
 mod parser;
 mod source;
@@ -14,13 +17,14 @@ const USAGE: &str = "\
 usage: jolang <file.jo> -o <output>
        jolang <file.jo> --emit=<stage>
 
-stages: tokens, ast";
+stages: tokens, ast, hir";
 
 /// A pipeline stage whose output can be printed with `--emit`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
     Tokens,
     Ast,
+    Hir,
 }
 
 enum Output {
@@ -53,6 +57,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options, String>
             let stage = match stage {
                 "tokens" => Stage::Tokens,
                 "ast" => Stage::Ast,
+                "hir" => Stage::Hir,
                 _ => return Err(format!("unknown stage `{stage}`")),
             };
             Output::Emit(stage)
@@ -103,15 +108,24 @@ fn compile(options: &Options) -> Result<(), ()> {
     let text = &sources.get(file).text;
 
     let (tokens, diagnostics) = lexer::lex(file, text);
-    report(&diagnostics, &sources)?;
+    if !diagnostics.is_empty() {
+        print_diagnostics(&diagnostics, &sources);
+        return Err(());
+    }
     if options.emits(Stage::Tokens) {
         print_tokens(&tokens, &sources);
         return Ok(());
     }
 
-    let ast = parser::parse(&tokens, text).map_err(|diagnostic| eprint!("{}", diagnostic.render(&sources)))?;
+    let ast = parser::parse(&tokens, text).map_err(|diagnostic| print_diagnostics(&[diagnostic], &sources))?;
     if options.emits(Stage::Ast) {
         print!("{}", ast.dump(&sources));
+        return Ok(());
+    }
+
+    let hir = checker::check(&ast, file, &sources).map_err(|diagnostics| print_diagnostics(&diagnostics, &sources))?;
+    if options.emits(Stage::Hir) {
+        print!("{}", hir.dump(&sources));
         return Ok(());
     }
 
@@ -129,10 +143,8 @@ fn print_tokens(tokens: &[Token], sources: &SourceMap) {
     }
 }
 
-/// Prints diagnostics. Fails if there were any, since every diagnostic is currently an error.
-fn report(diagnostics: &[Diagnostic], sources: &SourceMap) -> Result<(), ()> {
+fn print_diagnostics(diagnostics: &[Diagnostic], sources: &SourceMap) {
     for diagnostic in diagnostics {
         eprint!("{}", diagnostic.render(sources));
     }
-    if diagnostics.is_empty() { Ok(()) } else { Err(()) }
 }
