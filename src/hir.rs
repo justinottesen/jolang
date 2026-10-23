@@ -13,7 +13,6 @@ use crate::source::{SourceMap, Span};
 pub struct Hir {
     pub fns: Vec<Function>,
     exprs: Vec<Expr>,
-    pub symbols: Interner,
 }
 
 /// Refers to an expression stored in a `Hir`.
@@ -79,10 +78,10 @@ impl Hir {
     }
 
     /// Formats the HIR for `--emit=hir`, one node per line, with each node's type and span.
-    pub fn dump(&self, sources: &SourceMap) -> String {
+    pub fn dump(&self, sources: &SourceMap, symbols: &Interner) -> String {
         let mut out = String::new();
         for function in &self.fns {
-            let name = self.symbols.get(function.name);
+            let name = symbols.get(function.name);
             let location = sources.span_location(function.span);
             writeln!(out, "fn `{name}` -> {} ({location})", function.return_type).unwrap();
             self.dump_expr(&mut out, 1, function.body, sources);

@@ -56,6 +56,7 @@ impl FunctionBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intern::Interner;
     use crate::source::SourceMap;
     use crate::{checker, lexer, parser};
 
@@ -65,8 +66,9 @@ mod tests {
         let (tokens, diagnostics) = lexer::lex(file, text);
         assert!(diagnostics.is_empty(), "unexpected lexer diagnostics: {diagnostics:?}");
         let ast = parser::parse(&tokens, text).expect("unexpected parse error");
-        let hir = checker::check(&ast, file, &sources).expect("unexpected check errors");
-        lower(&hir).dump(&hir.symbols)
+        let mut symbols = Interner::default();
+        let hir = checker::check(&ast, file, &sources, &mut symbols).expect("unexpected check errors");
+        lower(&hir).dump(&symbols)
     }
 
     #[test]

@@ -126,6 +126,30 @@ Keeping instructions structured means that writing our own assembler later only 
 the same list to bytes. The rest of the pipeline is unaffected. The same goes for writing an ELF
 writer to replace `ld`. Both are planned for the self-hosted compiler, not the bootstrap.
 
+Codegen is deliberately naive. Every IR local gets its own slot in the function's stack frame, and
+each statement reads from and writes to those slots directly, with no register allocation. A
+function looks like:
+
+```asm
+main:
+    push rbp                    ; prologue: save the caller's frame pointer
+    mov rbp, rsp
+    sub rsp, 16                 ; reserve the frame; locals are at negative offsets from rbp
+.Lmain.bb0:                     ; one label per IR block
+    mov byte ptr [rbp - 1], 42  ; _0 = const 42_u8
+    mov al, byte ptr [rbp - 1]  ; return: load _0 into the return register
+    mov rsp, rbp                ; epilogue: free the frame, restore the caller's frame pointer
+    pop rbp
+    ret
+```
+
+The frame size is rounded up to a multiple of 16, so `rsp` stays aligned as the System V ABI
+requires at calls. Better code comes later, from the SSA stage and a real register allocator.
+
+Building an executable pipes the assembly into `as`, which writes an object file next to the output
+(`<output>.o`), then runs `ld` on it and deletes the object file. `--emit=asm` prints the assembly
+instead.
+
 ## Target and Runtime
 
 The only target is **x86-64 Linux**, producing a statically linked ELF executable. There is no libc.
@@ -219,8 +243,8 @@ The test runner is [tests/corpus.rs](../tests/corpus.rs). It runs with `cargo te
 tests can be filtered by name, for example `cargo test lexer` runs only the corpus files whose path
 contains `lexer`.
 
-**Until the compiler can build executables**, `expect-exit` programs are only run through the latest
-implemented stage, and pass if they get there without errors. The stage is a constant in the test
-runner, updated as each stage is added.
+Every program is compiled to an executable. `expect-exit` programs are then run, and their exit
+status compared. A program killed by a signal (for example, a segfault in generated code) fails
+with the signal number.
 
 Individual stages, like the lexer and parser, also get unit tests.

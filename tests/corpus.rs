@@ -2,14 +2,14 @@
 //! the program's comments. The directive format is described in `design/compiler.md`.
 
 use std::fs;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-/// Until the compiler can build executables, programs are only run through the pipeline up to this
-/// stage. `expect-exit` programs pass if they get there without errors.
-const LAST_STAGE: &str = "ir";
-
 const COMPILER: &str = env!("CARGO_BIN_EXE_jolang");
+
+/// Where compiled programs are written. Cargo provides this directory for integration tests.
+const OUTPUT_DIR: &str = concat!(env!("CARGO_TARGET_TMPDIR"), "/corpus");
 
 fn main() -> ExitCode {
     // Like the standard test harness, any non-flag arguments are filters on the test name.
@@ -27,7 +27,7 @@ fn main() -> ExitCode {
         if !filters.is_empty() && !filters.iter().any(|filter| name.contains(filter.as_str())) {
             continue;
         }
-        match check(path) {
+        match check(path, &name) {
             Ok(()) => {
                 println!("ok      {name}");
                 passed += 1;
@@ -96,7 +96,8 @@ fn parse_directives(source: &str) -> Result<Directives, String> {
     Ok(directives)
 }
 
-fn check(path: &Path) -> Result<(), String> {
+/// Checks one program. `name` is its path within the corpus.
+fn check(path: &Path, name: &str) -> Result<(), String> {
     let source = fs::read_to_string(path).map_err(|err| format!("cannot read file: {err}"))?;
     let directives = parse_directives(&source)?;
     if directives.exit.is_some() && !directives.errors.is_empty() {
@@ -106,18 +107,29 @@ fn check(path: &Path) -> Result<(), String> {
         return Err("no directives; add `// expect-exit: <status>` or `// expect-error: <message>`".into());
     }
 
+    let executable = Path::new(OUTPUT_DIR).join(name).with_extension("");
+    fs::create_dir_all(executable.parent().unwrap()).map_err(|err| format!("cannot create output directory: {err}"))?;
     let output = Command::new(COMPILER)
         .arg(path)
-        .arg(format!("--emit={LAST_STAGE}"))
+        .arg("-o")
+        .arg(&executable)
         .output()
         .map_err(|err| format!("cannot run compiler: {err}"))?;
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    if directives.exit.is_some() {
+    if let Some(expected) = directives.exit {
         if !output.status.success() {
             return Err(format!("expected to compile, but compilation failed:\n{stderr}"));
         }
-        return Ok(());
+        let status = Command::new(&executable)
+            .status()
+            .map_err(|err| format!("cannot run {}: {err}", executable.display()))?;
+        return match (status.code(), status.signal()) {
+            (Some(code), _) if code == i32::from(expected) => Ok(()),
+            (Some(code), _) => Err(format!("expected exit status {expected}, got {code}")),
+            (None, Some(signal)) => Err(format!("expected exit status {expected}, but killed by signal {signal}")),
+            (None, None) => Err(format!("expected exit status {expected}, but it did not exit normally")),
+        };
     }
 
     if output.status.success() {

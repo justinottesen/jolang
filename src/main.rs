@@ -1,17 +1,22 @@
+mod asm;
 mod ast;
 mod checker;
+mod codegen;
 mod diagnostic;
 mod hir;
 mod intern;
 mod ir;
 mod lexer;
+mod link;
 mod lower;
 mod parser;
 mod source;
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use diagnostic::Diagnostic;
+use intern::Interner;
 use lexer::Token;
 use source::SourceMap;
 
@@ -19,7 +24,7 @@ const USAGE: &str = "\
 usage: jolang <file.jo> -o <output>
        jolang <file.jo> --emit=<stage>
 
-stages: tokens, ast, hir, ir";
+stages: tokens, ast, hir, ir, asm";
 
 /// A pipeline stage whose output can be printed with `--emit`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,6 +33,7 @@ enum Stage {
     Ast,
     Hir,
     Ir,
+    Asm,
 }
 
 enum Output {
@@ -62,6 +68,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options, String>
                 "ast" => Stage::Ast,
                 "hir" => Stage::Hir,
                 "ir" => Stage::Ir,
+                "asm" => Stage::Asm,
                 _ => return Err(format!("unknown stage `{stage}`")),
             };
             Output::Emit(stage)
@@ -127,21 +134,28 @@ fn compile(options: &Options) -> Result<(), ()> {
         return Ok(());
     }
 
-    let hir = checker::check(&ast, file, &sources).map_err(|diagnostics| print_diagnostics(&diagnostics, &sources))?;
+    let mut symbols = Interner::default();
+    let hir = checker::check(&ast, file, &sources, &mut symbols)
+        .map_err(|diagnostics| print_diagnostics(&diagnostics, &sources))?;
     if options.emits(Stage::Hir) {
-        print!("{}", hir.dump(&sources));
+        print!("{}", hir.dump(&sources, &symbols));
         return Ok(());
     }
 
     let ir = lower::lower(&hir);
     if options.emits(Stage::Ir) {
-        print!("{}", ir.dump(&hir.symbols));
+        print!("{}", ir.dump(&symbols));
+        return Ok(());
+    }
+
+    let assembly = asm::print(&codegen::generate(&ir, &symbols));
+    if options.emits(Stage::Asm) {
+        print!("{assembly}");
         return Ok(());
     }
 
     let Output::Executable(path) = &options.output else { unreachable!("every stage is emitted above") };
-    eprintln!("error: cannot build `{path}`: building executables is not implemented yet");
-    Err(())
+    link::assemble_and_link(&assembly, Path::new(path)).map_err(|message| eprintln!("error: {message}"))
 }
 
 fn print_tokens(tokens: &[Token], sources: &SourceMap) {
