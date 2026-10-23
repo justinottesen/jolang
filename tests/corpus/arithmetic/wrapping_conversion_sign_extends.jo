@@ -1,0 +1,6 @@
+// expect-exit: 255
+// Converting a signed value to a wider type with `as%` sign-extends it first.
+fn main() -> u8 {
+    let e: i8 = -1;
+    (e as% u32 / 16777216) as u8    // 4294967295 / 2^24
+}

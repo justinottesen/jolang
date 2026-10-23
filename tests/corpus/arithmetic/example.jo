@@ -1,0 +1,8 @@
+// expect-exit: 42
+// The arithmetic example from design/language.md.
+fn main() -> u8 {
+    let big: u32 = 1000;
+    let small = (big / 10) as u8;   // checked: traps if the value doesn't fit
+    let wrapped: u8 = 255 +% 1;     // wrapping: 0
+    small - 58 + wrapped            // checked: traps on overflow
+}

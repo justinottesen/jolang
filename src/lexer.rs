@@ -9,6 +9,9 @@ pub enum TokenKind {
     Fn,
     Let,
     Mut,
+    As,
+    /// `as%`, a wrapping conversion.
+    AsPercent,
 
     Ident,
     Integer,
@@ -23,6 +26,16 @@ pub enum TokenKind {
     Colon,
     Eq,
 
+    // Operators
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    PlusPercent,
+    MinusPercent,
+    StarPercent,
+
     /// Marks the end of the file. Always the last token.
     Eof,
 }
@@ -34,6 +47,8 @@ impl TokenKind {
             TokenKind::Fn => "`fn`",
             TokenKind::Let => "`let`",
             TokenKind::Mut => "`mut`",
+            TokenKind::As => "`as`",
+            TokenKind::AsPercent => "`as%`",
             TokenKind::Ident => "identifier",
             TokenKind::Integer => "integer",
             TokenKind::LParen => "`(`",
@@ -44,6 +59,14 @@ impl TokenKind {
             TokenKind::Semicolon => "`;`",
             TokenKind::Colon => "`:`",
             TokenKind::Eq => "`=`",
+            TokenKind::Plus => "`+`",
+            TokenKind::Minus => "`-`",
+            TokenKind::Star => "`*`",
+            TokenKind::Slash => "`/`",
+            TokenKind::Percent => "`%`",
+            TokenKind::PlusPercent => "`+%`",
+            TokenKind::MinusPercent => "`-%`",
+            TokenKind::StarPercent => "`*%`",
             TokenKind::Eof => "end of file",
         }
     }
@@ -87,6 +110,11 @@ impl Lexer<'_> {
                 b';' => self.punctuation(TokenKind::Semicolon, 1),
                 b':' => self.punctuation(TokenKind::Colon, 1),
                 b'=' => self.punctuation(TokenKind::Eq, 1),
+                b'+' => self.operator(TokenKind::Plus, TokenKind::PlusPercent),
+                b'-' => self.operator(TokenKind::Minus, TokenKind::MinusPercent),
+                b'*' => self.operator(TokenKind::Star, TokenKind::StarPercent),
+                b'/' => self.punctuation(TokenKind::Slash, 1),
+                b'%' => self.punctuation(TokenKind::Percent, 1),
                 b'0'..=b'9' => self.integer(start),
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.ident_or_keyword(start),
                 _ => self.invalid_character(start),
@@ -126,6 +154,16 @@ impl Lexer<'_> {
         self.push(kind, start);
     }
 
+    /// Lexes a one-character operator, which becomes its wrapping form if immediately followed by
+    /// `%`.
+    fn operator(&mut self, plain: TokenKind, wrapping: TokenKind) {
+        if self.peek(1) == Some(b'%') {
+            self.punctuation(wrapping, 2);
+        } else {
+            self.punctuation(plain, 1);
+        }
+    }
+
     fn integer(&mut self, start: usize) {
         // Consume anything that could continue the literal, so `123abc` is reported as one bad
         // literal instead of an integer followed by an identifier.
@@ -146,6 +184,11 @@ impl Lexer<'_> {
             "fn" => TokenKind::Fn,
             "let" => TokenKind::Let,
             "mut" => TokenKind::Mut,
+            "as" if self.peek(0) == Some(b'%') => {
+                self.pos += 1;
+                TokenKind::AsPercent
+            }
+            "as" => TokenKind::As,
             _ => TokenKind::Ident,
         };
         self.push(kind, start);
@@ -208,6 +251,20 @@ mod tests {
     }
 
     #[test]
+    fn operators() {
+        use TokenKind::*;
+        assert_eq!(
+            kinds("+ - * / % +% -% *% as as% -> //"),
+            [Plus, Minus, Star, Slash, Percent, PlusPercent, MinusPercent, StarPercent, As, AsPercent, Arrow, Eof]
+        );
+        // `%` only joins an operator when it immediately follows it.
+        assert_eq!(kinds("a + %b"), [Ident, Plus, Percent, Ident, Eof]);
+        assert_eq!(kinds("a+%b"), [Ident, PlusPercent, Ident, Eof]);
+        assert_eq!(kinds("x as %"), [Ident, As, Percent, Eof]);
+        assert_eq!(kinds("ask as_ cast"), [Ident, Ident, Ident, Eof]);
+    }
+
+    #[test]
     fn empty_file() {
         assert_eq!(kinds(""), [TokenKind::Eof]);
     }
@@ -233,7 +290,7 @@ mod tests {
 
     #[test]
     fn invalid_characters_are_reported_and_skipped() {
-        let (tokens, diagnostics, _) = lex_str("fn $ main \u{e9} - /");
+        let (tokens, diagnostics, _) = lex_str("fn $ main \u{e9} # ?");
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
         assert_eq!(kinds, [TokenKind::Fn, TokenKind::Ident, TokenKind::Eof]);
         let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
@@ -242,8 +299,8 @@ mod tests {
             [
                 "invalid character '$'",
                 "invalid character '\u{e9}'",
-                "invalid character '-'",
-                "invalid character '/'",
+                "invalid character '#'",
+                "invalid character '?'",
             ]
         );
         // The multi-byte character is skipped as a whole.

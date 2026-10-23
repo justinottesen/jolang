@@ -1,7 +1,7 @@
 //! Builds an AST from tokens by recursive descent: each grammar rule in design/language.md is one
 //! function, which consumes the tokens for that rule.
 
-use crate::ast::{Ast, Expr, ExprId, ExprKind, FnDecl, Ident, Stmt, TypeExpr};
+use crate::ast::{Ast, BinaryOp, Expr, ExprId, ExprKind, FnDecl, Ident, Stmt, TypeExpr, UnaryOp};
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Token, TokenKind};
 use crate::source::Span;
@@ -109,28 +109,94 @@ impl Parser<'_> {
         Ok(Stmt::Let { mutable, name, ty, init, span: let_token.span.to(semicolon.span) })
     }
 
-    // expr = primary ( "=" expr )? ;
+    // expr = binary ( "=" expr )? ;
     fn parse_expr(&mut self) -> ParseResult<ExprId> {
-        let target = self.parse_primary()?;
+        let target = self.parse_binary(0)?;
         if self.eat(TokenKind::Eq).is_none() {
             return Ok(target);
         }
         let value = self.parse_expr()?;
-        let span = self.ast.expr(target).span.to(self.ast.expr(value).span);
+        let span = self.span_of(target).to(self.span_of(value));
         Ok(self.ast.add_expr(Expr { kind: ExprKind::Assign { target, value }, span }))
     }
 
-    // primary = INTEGER | IDENT | block ;
+    // binary = cast ( binary_op cast )* ;
+    //
+    // Parses by precedence climbing: only operators that bind at least as tightly as
+    // `min_precedence` are consumed here, and looser ones are left to the caller.
+    fn parse_binary(&mut self, min_precedence: u8) -> ParseResult<ExprId> {
+        let mut lhs = self.parse_cast()?;
+        while let Some((op, precedence)) = binary_op(self.peek().kind) {
+            if precedence < min_precedence {
+                break;
+            }
+            self.advance();
+            // The right side only takes operators that bind more tightly, which makes operators
+            // of equal precedence left-associative: `a - b - c` is `(a - b) - c`.
+            let rhs = self.parse_binary(precedence + 1)?;
+            let span = self.span_of(lhs).to(self.span_of(rhs));
+            lhs = self.ast.add_expr(Expr { kind: ExprKind::Binary { op, lhs, rhs }, span });
+        }
+        Ok(lhs)
+    }
+
+    // cast = unary ( ( "as" | "as%" ) type )* ;
+    fn parse_cast(&mut self) -> ParseResult<ExprId> {
+        let mut operand = self.parse_unary()?;
+        loop {
+            let wrapping = match self.peek().kind {
+                TokenKind::As => false,
+                TokenKind::AsPercent => true,
+                _ => return Ok(operand),
+            };
+            self.advance();
+            let ty = self.parse_type()?;
+            let span = self.span_of(operand).to(ty.span());
+            operand = self.ast.add_expr(Expr { kind: ExprKind::Cast { operand, ty, wrapping }, span });
+        }
+    }
+
+    // unary = ( "-" | "-%" ) unary | primary ;
+    fn parse_unary(&mut self) -> ParseResult<ExprId> {
+        let op = match self.peek().kind {
+            TokenKind::Minus => UnaryOp::Neg,
+            TokenKind::MinusPercent => UnaryOp::WrappingNeg,
+            _ => return self.parse_primary(),
+        };
+        let op_token = self.advance();
+        let operand = self.parse_unary()?;
+        let span = op_token.span.to(self.span_of(operand));
+        Ok(self.ast.add_expr(Expr { kind: ExprKind::Unary { op, operand }, span }))
+    }
+
+    // primary = INTEGER | IDENT | block | "(" expr ")" | "(" ")" ;
     fn parse_primary(&mut self) -> ParseResult<ExprId> {
         let token = self.peek();
         let kind = match token.kind {
             TokenKind::Integer => ExprKind::Integer,
             TokenKind::Ident => ExprKind::Name(Ident { span: token.span }),
             TokenKind::LBrace => return self.parse_block(),
+            TokenKind::LParen => return self.parse_parenthesized(),
             _ => return Err(self.error_expected("expression")),
         };
         self.advance();
         Ok(self.ast.add_expr(Expr { kind, span: token.span }))
+    }
+
+    /// Parses `()`, or an expression in parentheses. Parentheses only group, so they don't appear
+    /// in the AST.
+    fn parse_parenthesized(&mut self) -> ParseResult<ExprId> {
+        let open = self.expect(TokenKind::LParen)?;
+        if let Some(close) = self.eat(TokenKind::RParen) {
+            return Ok(self.ast.add_expr(Expr { kind: ExprKind::Unit, span: open.span.to(close.span) }));
+        }
+        let inner = self.parse_expr()?;
+        self.expect(TokenKind::RParen)?;
+        Ok(inner)
+    }
+
+    fn span_of(&self, expr: ExprId) -> Span {
+        self.ast.expr(expr).span
     }
 
     fn peek(&self) -> Token {
@@ -194,6 +260,22 @@ impl Parser<'_> {
 
         Diagnostic::error(format!("expected {expected}, found {description}"), span)
     }
+}
+
+/// The binary operator a token stands for, and its precedence. Higher numbers bind more tightly.
+fn binary_op(kind: TokenKind) -> Option<(BinaryOp, u8)> {
+    let op = match kind {
+        TokenKind::Star => (BinaryOp::Mul, 2),
+        TokenKind::Slash => (BinaryOp::Div, 2),
+        TokenKind::Percent => (BinaryOp::Rem, 2),
+        TokenKind::StarPercent => (BinaryOp::WrappingMul, 2),
+        TokenKind::Plus => (BinaryOp::Add, 1),
+        TokenKind::Minus => (BinaryOp::Sub, 1),
+        TokenKind::PlusPercent => (BinaryOp::WrappingAdd, 1),
+        TokenKind::MinusPercent => (BinaryOp::WrappingSub, 1),
+        _ => return None,
+    };
+    Some(op)
 }
 
 #[cfg(test)]
@@ -309,6 +391,75 @@ mod tests {
         assert_eq!(dump_body("{ a = b = 1 }"), expected);
     }
 
+    /// Parses an expression, and prints it fully parenthesized, to show how it was grouped.
+    fn grouping(expr: &str) -> String {
+        let text = format!("fn main() -> u8 {{ {expr} }}");
+        let (ast, _) = parse_str(&text);
+        let ast = ast.unwrap();
+        let ExprKind::Block { tail: Some(tail), .. } = ast.expr(ast.fns[0].body).kind else { panic!() };
+        fn show(ast: &Ast, id: ExprId, text: &str) -> String {
+            let expr = ast.expr(id);
+            match expr.kind {
+                ExprKind::Binary { op, lhs, rhs } => {
+                    format!("({} {} {})", show(ast, lhs, text), op.symbol(), show(ast, rhs, text))
+                }
+                ExprKind::Unary { op, operand } => format!("({}{})", op.symbol(), show(ast, operand, text)),
+                ExprKind::Cast { operand, ty, wrapping } => {
+                    let keyword = if wrapping { "as%" } else { "as" };
+                    let ty = &text[ty.span().start as usize..ty.span().end as usize];
+                    format!("({} {keyword} {ty})", show(ast, operand, text))
+                }
+                ExprKind::Assign { target, value } => format!("({} = {})", show(ast, target, text), show(ast, value, text)),
+                _ => text[expr.span.start as usize..expr.span.end as usize].to_string(),
+            }
+        }
+        show(&ast, tail, &text)
+    }
+
+    #[test]
+    fn precedence() {
+        assert_eq!(grouping("a + b * c"), "(a + (b * c))");
+        assert_eq!(grouping("a * b + c"), "((a * b) + c)");
+        assert_eq!(grouping("a - b - c"), "((a - b) - c)");
+        assert_eq!(grouping("a / b % c *% d"), "(((a / b) % c) *% d)");
+        assert_eq!(grouping("a +% b -% c + d"), "(((a +% b) -% c) + d)");
+        assert_eq!(grouping("(a + b) * c"), "((a + b) * c)");
+        assert_eq!(grouping("-a * b"), "((-a) * b)");
+        assert_eq!(grouping("- -% a"), "(-(-%a))");
+        assert_eq!(grouping("a - -b"), "(a - (-b))");
+        assert_eq!(grouping("a * b as u8"), "(a * (b as u8))");
+        assert_eq!(grouping("-a as u8"), "((-a) as u8)");
+        assert_eq!(grouping("a as u16 as% u8"), "((a as u16) as% u8)");
+        assert_eq!(grouping("x = a + b"), "(x = (a + b))");
+        assert_eq!(grouping("x = y = a"), "(x = (y = a))");
+    }
+
+    #[test]
+    fn parentheses_and_unit() {
+        let (ast, sources) = parse_str("fn main() -> u8 { let u: () = (); ((x)) }");
+        let ast = ast.unwrap();
+        let ExprKind::Block { stmts, tail: Some(tail) } = ast.expr(ast.fns[0].body).kind else { panic!() };
+        let Stmt::Let { init, .. } = ast.stmts(stmts)[0] else { panic!() };
+        assert!(matches!(ast.expr(init).kind, ExprKind::Unit));
+        // Parentheses only group; the expression inside is used directly.
+        assert!(matches!(ast.expr(tail).kind, ExprKind::Name(_)));
+        assert_eq!(sources.text(ast.expr(tail).span), "x");
+    }
+
+    #[test]
+    fn block_statement_ends_before_operator() {
+        // As in Rust, a block at the start of a statement is a whole statement, so `- 1` is a
+        // separate expression rather than a subtraction.
+        let expected = "  \
+  block
+    statement (no `;`)
+      block
+        name `x`
+    unary `-`
+      integer `1`";
+        assert_eq!(dump_body("{ { x } - 1 }"), expected);
+    }
+
     #[test]
     fn unit_type() {
         let (ast, sources) = parse_str("fn f() -> ( ) { }");
@@ -353,6 +504,12 @@ mod tests {
             ("fn main() -> u8 { let x = ; }", "expected expression, found `;`"),
             ("fn main() -> u8 { x = }", "expected expression, found `}`"),
             ("fn main() -> u8 { { 1 } = 2; }", "expected expression, found `=`"),
+            ("fn main() -> u8 { 1 + }", "expected expression, found `}`"),
+            ("fn main() -> u8 { 1 + * 2 }", "expected expression, found `*`"),
+            ("fn main() -> u8 { (1 + 2 }", "expected `)`, found `}`"),
+            ("fn main() -> u8 { x as }", "expected type, found `}`"),
+            ("fn main() -> u8 { x as 5 }", "expected type, found integer `5`"),
+            ("fn main() -> u8 { a + %b }", "expected expression, found `%`"),
         ];
         for (text, message) in cases {
             assert_eq!(parse_error(text).message, message, "for {text:?}");

@@ -1,0 +1,6 @@
+// expect-trap
+// 256 does not fit in u8.
+fn main() -> u8 {
+    let x: u32 = 256;
+    x as u8
+}

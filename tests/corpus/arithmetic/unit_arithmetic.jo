@@ -1,0 +1,5 @@
+fn main() -> u8 {
+    let x = () + ();  // expect-error: operator `+` cannot be applied to type `()`
+    x;
+    0
+}

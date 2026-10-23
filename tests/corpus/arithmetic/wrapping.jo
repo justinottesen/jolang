@@ -1,0 +1,9 @@
+// expect-exit: 83
+fn main() -> u8 {
+    let a: u8 = 255 +% 1;       // 0
+    let b: u8 = 0 -% 1;         // 255
+    let c: u8 = 16 *% 16;       // 0
+    let d: i8 = -128;
+    let e = -%d;                // -128
+    a + (b - 200) + c + (e as% u8 - 100)
+}

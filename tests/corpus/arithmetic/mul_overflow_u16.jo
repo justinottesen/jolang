@@ -1,0 +1,6 @@
+// expect-trap
+// 300 * 300 = 90000 does not fit in u16.
+fn main() -> u8 {
+    let x: u16 = 300;
+    (x * 300) as% u8
+}

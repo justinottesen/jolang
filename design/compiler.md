@@ -156,6 +156,31 @@ fields that have already been overwritten.
 
 Values of type `()` carry no data, so storing one does nothing, and their locals take no space.
 
+**Statements compute rvalues.** The right side of an IR assignment is an *rvalue*: an operand, an
+arithmetic operation on two operands, a negation, or a conversion. Each operation records whether
+it is checked (traps) or wrapping:
+
+```
+_2 = checked_mul(copy _1, const 3_u8)
+_0 = checked_add(copy _2, const 1_u8)
+_3 = wrapping_cast(copy _1) to u32
+```
+
+The operands of an operation must be constants or locals, so a nested expression is first
+evaluated into a temporary. As with assignment, evaluation order needs care: in `x + { x = 5; x }`
+the left `x` must be read before the right side runs. So if the right operand isn't a constant or a
+variable, the left operand is copied into a temporary even when it is just a variable.
+
+A conversion that can never fail, like `u8` to `u32`, is lowered as unchecked, so the IR shows
+exactly which operations can trap.
+
+**Traps have no edges in the control-flow graph.** A trap ends the process immediately, with no
+unwinding, so nothing in the function runs after it, and a checked operation can stay an ordinary
+statement in the middle of a block. Rust's MIR instead makes each check an `assert` terminator with
+an edge to a panic path, because a Rust panic unwinds and runs destructors. Linear-type checking
+benefits from this: a resource doesn't need to be consumed on a path that ends in a trap, since the
+process is gone (and the OS reclaims what it held).
+
 ### Codegen and printing
 
 Codegen produces a list of structured x86-64 instructions (a Rust enum), not text. The printer turns
@@ -184,6 +209,26 @@ main:
 
 x86 can't move directly from memory to memory, so `_1 = copy _2` becomes a load into `rax` and a
 store from it. Locals of type `()` get no slot at all.
+
+**Arithmetic** loads the operands into `rax` and `rcx`, computes, and stores the low bits of `rax`
+into the result's slot. How overflow is checked depends on the width:
+
+- **8- and 16-bit** values are loaded into 32-bit registers, zero- or sign-extended. At 32 bits,
+  adding, subtracting, multiplying, or negating them always gives the exact result, so a checked
+  operation compares that result against the type's range (`cmp eax, 255; ja trap` for a `u8`).
+  This same approach will extend to arbitrary-width integers like `u7`.
+- **32- and 64-bit** values are computed at their own width, and the check uses the flag the
+  instruction sets: carry for unsigned overflow, overflow for signed. Unsigned multiplication uses
+  `mul`, since `imul` only reports signed overflow.
+
+A wrapping operation is the same computation with no check: storing the low bits wraps it.
+
+Division checks for a zero divisor, and for signed types also for `MIN / -1`, before dividing,
+since x86's `idiv` instruction would fault on both. Conversions load the operand extended to 64
+bits, compare it against the target type's range if checked, and store the low bits.
+
+Every failed check jumps to a single `ud2` instruction at the end of the function, which makes the
+CPU fault, and Linux kills the process with `SIGILL`.
 
 The frame size is rounded up to a multiple of 16, so `rsp` stays aligned as the System V ABI
 requires at calls. Better code comes later, from the SSA stage and a real register allocator.
@@ -290,16 +335,33 @@ fn main() -> u8 {
 }
 ```
 
+A program that should compile but fail a runtime check says so with `expect-trap` in place of
+`expect-exit`:
+
+```jo
+// expect-trap
+fn main() -> u8 {
+    let x: u8 = 255;
+    x + 1
+}
+```
+
 Every program's diagnostics must match its directives exactly, so an unexpected warning fails the
-test too. A file cannot contain both `expect-exit` and `expect-error`. Each line can only hold one
-directive, so a test shouldn't produce two diagnostics on the same line.
+test too. A file can have at most one of `expect-exit` and `expect-trap`, and neither can be
+combined with `expect-error`. Each line can only hold one directive, so a test shouldn't produce
+two diagnostics on the same line.
+
+A trap test passes whenever the program traps, so it can't tell an intended trap from a codegen
+bug that traps everywhere. Pair each trap test with programs that do the same operation without
+overflowing (the `boundaries.jo` and wrapping tests), so a check that fires too eagerly shows up as
+a failure there.
 
 The test runner is [tests/corpus.rs](../tests/corpus.rs). It runs with `cargo test`, and like other
 tests can be filtered by name, for example `cargo test lexer` runs only the corpus files whose path
 contains `lexer`.
 
-Every program is compiled to an executable. `expect-exit` programs are then run, and their exit
-status compared. A program killed by a signal (for example, a segfault in generated code) fails
-with the signal number.
+Every program is compiled to an executable. `expect-exit` and `expect-trap` programs are then
+run, and the way they ended is compared. A program killed by any other signal (for example, a
+segfault in generated code) fails with the signal number.
 
 Individual stages, like the lexer and parser, also get unit tests.

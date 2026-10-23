@@ -1,0 +1,5 @@
+// Arithmetic on only literals still has no type of its own.
+fn main() -> u8 {
+    let x = 1 + 2;  // expect-error: cannot infer the type of integer `1`
+    x
+}

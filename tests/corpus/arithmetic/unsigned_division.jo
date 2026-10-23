@@ -1,0 +1,5 @@
+// expect-exit: 32
+fn main() -> u8 {
+    let a: u8 = 17;
+    (a / 5) * 10 + a % 5        // 3 * 10 + 2
+}

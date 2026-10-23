@@ -1,8 +1,8 @@
 //! The intermediate representation: each function as a control-flow graph over places.
 //!
 //! A function has typed locals (storage slots) and basic blocks. Each block is a list of
-//! statements, which assign values to places, followed by a terminator, which decides where control
-//! goes next. See "Lowering" in design/compiler.md.
+//! statements, which compute a value and assign it to a place, followed by a terminator, which
+//! decides where control goes next. See "Lowering" in design/compiler.md.
 
 use std::fmt::Write;
 
@@ -44,7 +44,7 @@ pub struct Block {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Statement {
-    Assign { place: Place, value: Operand },
+    Assign { place: Place, value: Rvalue },
 }
 
 /// A location that can be read or assigned. For now only a whole local; later also parts of one,
@@ -54,13 +54,39 @@ pub struct Place {
     pub local: Local,
 }
 
-/// A value used by a statement.
+/// A value used by an rvalue.
 #[derive(Clone, Copy, Debug)]
 pub enum Operand {
-    Constant { value: u128, ty: Type },
+    Constant { value: i128, ty: Type },
     /// The value in a place, which is left unchanged. Moving a value out of a place, which linear
     /// types will need, will be a separate operand.
     Copy(Place),
+}
+
+/// A computation whose result is stored in a place. The result has the place's type.
+///
+/// Some rvalues can trap. A trap ends the process immediately, so it doesn't need an edge in the
+/// control-flow graph: nothing runs after it.
+#[derive(Clone, Copy, Debug)]
+pub enum Rvalue {
+    Use(Operand),
+    /// Arithmetic on two operands of the result's type. If `checked`, traps on overflow; otherwise
+    /// wraps. Division and remainder are always checked, and also trap on division by zero.
+    Binary { op: BinOp, checked: bool, lhs: Operand, rhs: Operand },
+    /// Negation of a signed operand. Traps on overflow if `checked`; otherwise wraps.
+    Neg { checked: bool, operand: Operand },
+    /// Converts an integer operand to the result's type. If `checked`, traps when the value
+    /// doesn't fit; otherwise keeps the low bits.
+    Cast { checked: bool, operand: Operand },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -87,7 +113,8 @@ impl Ir {
                 for statement in &block.statements {
                     match statement {
                         Statement::Assign { place, value } => {
-                            writeln!(out, "    {} = {}", dump_place(*place), dump_operand(*value)).unwrap();
+                            let ty = function.locals[place.local.0 as usize].ty;
+                            writeln!(out, "    {} = {}", dump_place(*place), dump_rvalue(*value, ty)).unwrap();
                         }
                     }
                 }
@@ -109,5 +136,27 @@ fn dump_operand(operand: Operand) -> String {
     match operand {
         Operand::Constant { value, ty } => format!("const {value}_{ty}"),
         Operand::Copy(place) => format!("copy {}", dump_place(place)),
+    }
+}
+
+/// Formats an rvalue whose result has type `ty`.
+fn dump_rvalue(rvalue: Rvalue, ty: Type) -> String {
+    let checked = |checked| if checked { "checked" } else { "wrapping" };
+    match rvalue {
+        Rvalue::Use(operand) => dump_operand(operand),
+        Rvalue::Binary { op, checked: is_checked, lhs, rhs } => {
+            let op = match op {
+                BinOp::Add => "add",
+                BinOp::Sub => "sub",
+                BinOp::Mul => "mul",
+                BinOp::Div => "div",
+                BinOp::Rem => "rem",
+            };
+            format!("{}_{op}({}, {})", checked(is_checked), dump_operand(lhs), dump_operand(rhs))
+        }
+        Rvalue::Neg { checked: is_checked, operand } => format!("{}_neg({})", checked(is_checked), dump_operand(operand)),
+        Rvalue::Cast { checked: is_checked, operand } => {
+            format!("{}_cast({}) to {ty}", checked(is_checked), dump_operand(operand))
+        }
     }
 }

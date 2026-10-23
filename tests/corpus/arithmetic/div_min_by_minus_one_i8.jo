@@ -1,0 +1,6 @@
+// expect-trap
+// -128 / -1 = 128 does not fit in i8.
+fn main() -> u8 {
+    let x: i8 = -128;
+    (x / -1) as% u8
+}

@@ -1,0 +1,6 @@
+// expect-exit: 6
+fn main() -> u8 {
+    let a: u8 = 2 + 3 * 4;      // 14
+    let b: u8 = (2 + 3) * 4;    // 20
+    b - a
+}

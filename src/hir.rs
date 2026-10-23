@@ -6,6 +6,7 @@
 
 use std::fmt::{self, Write};
 
+use crate::ast::{BinaryOp, UnaryOp};
 use crate::intern::{Interner, Symbol};
 use crate::source::{SourceMap, Span};
 
@@ -35,26 +36,48 @@ pub struct LocalId(pub u32);
 pub enum Type {
     /// `()`: one value, carrying no information.
     Unit,
-    U8,
+    Int(IntType),
 }
 
 impl Type {
-    /// The largest value of an integer type, or `None` if the type isn't an integer.
-    pub fn max_value(self) -> Option<u128> {
-        match self {
-            Type::Unit => None,
-            Type::U8 => Some(u8::MAX.into()),
-        }
+    pub const U8: Type = Type::Int(IntType { signed: false, bits: 8 });
+}
+
+/// An integer type. Signed integers are two's complement. Only 8, 16, 32, and 64 bits are allowed
+/// for now, but nothing here depends on that.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IntType {
+    pub signed: bool,
+    pub bits: u16,
+}
+
+impl IntType {
+    pub fn min(self) -> i128 {
+        if self.signed { -(1 << (self.bits - 1)) } else { 0 }
+    }
+
+    pub fn max(self) -> i128 {
+        if self.signed { (1 << (self.bits - 1)) - 1 } else { (1 << self.bits) - 1 }
+    }
+
+    /// Whether every value of `other` is also a value of this type.
+    pub fn contains(self, other: IntType) -> bool {
+        self.min() <= other.min() && other.max() <= self.max()
+    }
+}
+
+impl fmt::Display for IntType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}{}", if self.signed { 'i' } else { 'u' }, self.bits)
     }
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let name = match self {
-            Type::Unit => "()",
-            Type::U8 => "u8",
-        };
-        f.write_str(name)
+        match self {
+            Type::Unit => f.write_str("()"),
+            Type::Int(int) => int.fmt(f),
+        }
     }
 }
 
@@ -96,13 +119,21 @@ pub struct Expr {
 #[derive(Clone, Copy, Debug)]
 pub enum ExprKind {
     /// An integer constant. The value is guaranteed to fit in the expression's type.
-    Integer { value: u128 },
+    Integer { value: i128 },
+    /// The unit value, `()`.
+    Unit,
     /// Reads a local variable. As the target of an assignment, refers to the variable instead.
     Local(LocalId),
     /// Statements, then optionally a final expression that gives the block its value.
     Block { stmts: StmtRange, tail: Option<ExprId> },
     /// Stores `value` in `target`, which is always a `Local` expression for now.
     Assign { target: ExprId, value: ExprId },
+    /// Negation. The operand has the same type as the expression, which is a signed integer.
+    Unary { op: UnaryOp, operand: ExprId },
+    /// Arithmetic. Both operands have the same integer type as the expression.
+    Binary { op: BinaryOp, lhs: ExprId, rhs: ExprId },
+    /// Converts an integer to the expression's type: `as%` if `wrapping`, otherwise `as`.
+    Cast { operand: ExprId, wrapping: bool },
 }
 
 impl Hir {
@@ -170,12 +201,21 @@ impl Dumper<'_> {
         let label = match expr.kind {
             ExprKind::Integer { value } => format!("integer {value}"),
             ExprKind::Local(local) => format!("local `{}`", self.local_name(local)),
+            ExprKind::Unit => "unit".to_string(),
             ExprKind::Block { .. } => "block".to_string(),
             ExprKind::Assign { .. } => "assign".to_string(),
+            ExprKind::Unary { op, .. } => format!("unary `{}`", op.symbol()),
+            ExprKind::Binary { op, .. } => format!("binary `{}`", op.symbol()),
+            ExprKind::Cast { wrapping, .. } => if wrapping { "cast `as%`" } else { "cast `as`" }.to_string(),
         };
         self.line(depth, &format!("{label}: {}", expr.ty), expr.span);
         match expr.kind {
-            ExprKind::Integer { .. } | ExprKind::Local(_) => {}
+            ExprKind::Integer { .. } | ExprKind::Unit | ExprKind::Local(_) => {}
+            ExprKind::Unary { operand, .. } | ExprKind::Cast { operand, .. } => self.expr(depth + 1, operand),
+            ExprKind::Binary { lhs, rhs, .. } => {
+                self.expr(depth + 1, lhs);
+                self.expr(depth + 1, rhs);
+            }
             ExprKind::Block { stmts, tail } => {
                 for stmt in self.hir.stmts(stmts) {
                     self.stmt(depth + 1, *stmt);

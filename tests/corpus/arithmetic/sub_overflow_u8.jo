@@ -1,0 +1,6 @@
+// expect-trap
+// 0 - 1 does not fit in u8.
+fn main() -> u8 {
+    let x: u8 = 0;
+    x - 1
+}

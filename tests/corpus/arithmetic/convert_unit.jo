@@ -1,0 +1,3 @@
+fn main() -> u8 {
+    () as u8  // expect-error: cannot convert `()` to `u8`: only integers can be converted
+}

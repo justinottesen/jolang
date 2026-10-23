@@ -1,0 +1,8 @@
+// expect-exit: 133
+// `-` before a literal is part of it, so the minimum of each signed type can be written directly.
+fn main() -> u8 {
+    let a: i8 = -128;
+    let b: i64 = -9223372036854775808;
+    let c: i8 = - 5;
+    (a as% u8) + (b as% u8) + (c + 10) as u8
+}

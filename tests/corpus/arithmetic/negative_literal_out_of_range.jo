@@ -1,0 +1,4 @@
+fn main() -> u8 {
+    let x: i8 = -129;  // expect-error: `-129` does not fit in `i8` (range -128 to 127)
+    x as% u8
+}

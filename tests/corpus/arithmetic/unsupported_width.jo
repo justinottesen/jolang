@@ -1,0 +1,4 @@
+fn main() -> u8 {
+    let x: u7 = 1;  // expect-error: `u7` is not supported: integer types must be 8, 16, 32, or 64 bits for now
+    0
+}

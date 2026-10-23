@@ -1,0 +1,6 @@
+// expect-trap
+// i32::MAX + 1.
+fn main() -> u8 {
+    let x: i32 = 2147483647;
+    (x + 1) as% u8
+}

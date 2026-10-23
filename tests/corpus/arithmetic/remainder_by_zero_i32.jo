@@ -1,0 +1,6 @@
+// expect-trap
+// Remainder by zero.
+fn main() -> u8 {
+    let x: i32 = 0;
+    (7 % x) as u8
+}

@@ -1,0 +1,12 @@
+// expect-exit: 255
+// Results that land exactly on the edge of the range don't trap.
+fn main() -> u8 {
+    let a: u8 = 254;
+    let b: i8 = -127;
+    let c: i32 = -2147483647;
+    let d: u64 = 18446744073709551614;
+    let e = (b - 1) as% u8;                 // -128, so 128
+    let f = (c - 1) / 2147483647;           // -2147483648 / 2147483647 = -1
+    let g = (d + 1) / 18446744073709551615; // 1
+    (a + 1) - e + 128 + (f + 1) as u8 - 1 + g as u8   // 255 - 128 + 128 + 0 - 1 + 1
+}

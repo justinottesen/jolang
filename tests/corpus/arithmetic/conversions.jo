@@ -1,0 +1,12 @@
+// expect-exit: 137
+fn main() -> u8 {
+    let a: u8 = 200;
+    let b = a as u32 * 100;     // widening never traps: 20000
+    let c: i32 = -1;
+    let d = c as% u8;           // wrapping keeps the low bits: 255
+    let e: i8 = -2;
+    let f = e as i64;           // widening a signed value keeps it: -2
+    let g: u64 = 18446744073709551615;
+    let h = g as% u16;          // 65535
+    (b / 1000) as u8 + d / 5 + (f + 3) as u8 + (h / 1000) as u8   // 20 + 51 + 1 + 65
+}

@@ -1,0 +1,6 @@
+// expect-trap
+// Both literals fit in `u8`, but their sum doesn't. Without compile-time evaluation, this is
+// caught at runtime.
+fn main() -> u8 {
+    255 + 1
+}

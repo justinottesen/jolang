@@ -53,7 +53,8 @@ Language features should not make fast or incremental compilation impossible. In
 ## Current Slice
 
 For now, the language is very small. A program is a single function, `main`, which returns the
-process's exit status. Its body can use local variables, assignment, and nested blocks.
+process's exit status. Its body can use local variables, assignment, nested blocks, integer
+arithmetic, and conversions between integer types.
 
 ```jo
 fn main() -> u8 {
@@ -68,6 +69,15 @@ fn main() -> u8 {
 }
 ```
 
+```jo
+fn main() -> u8 {
+    let big: u32 = 1000;
+    let small = (big / 10) as u8;   // checked: traps if the value doesn't fit
+    let wrapped: u8 = 255 +% 1;     // wrapping: 0
+    small - 58 + wrapped            // checked: traps on overflow
+}
+```
+
 ### Lexical structure
 
 Source files are UTF-8, using the `.jo` extension.
@@ -77,9 +87,13 @@ Source files are UTF-8, using the `.jo` extension.
 | Whitespace  | Space, tab, `\n`, `\r`. Not significant.                       |
 | Comment     | `//` to the end of the line.                                   |
 | Identifier  | `[A-Za-z_][A-Za-z0-9_]*` (ASCII only for now).                 |
-| Keyword     | `fn` `let` `mut`                                               |
+| Keyword     | `fn` `let` `mut` `as`                                          |
 | Integer     | `[0-9]+` (decimal only for now).                               |
 | Punctuation | `(` `)` `{` `}` `->` `;` `:` `=`                               |
+| Operator    | `+` `-` `*` `/` `%` `+%` `-%` `*%` `as%`                       |
+
+Operators ending in `%` are single tokens: `a +% b` is wrapping addition, while `a + %b` is a syntax
+error.
 
 Type names such as `u8` are ordinary identifiers that resolve to built-in types, not keywords. This
 keeps built-in and user-defined types uniform, and lets new types be added without touching the
@@ -95,9 +109,23 @@ block    = "{" stmt* expr? "}" ;
 stmt     = "let" "mut"? IDENT ( ":" type )? "=" expr ";"
          | expr ";"
          | block ;                       (* a block-like expression needs no `;` *)
-expr     = primary ( "=" expr )? ;       (* assignment *)
-primary  = INTEGER | IDENT | block ;
+expr     = binary ( "=" expr )? ;        (* assignment *)
+binary   = cast ( binary_op cast )* ;    (* see the precedence table *)
+cast     = unary ( ( "as" | "as%" ) type )* ;
+unary    = ( "-" | "-%" ) unary | primary ;
+primary  = INTEGER | IDENT | block | "(" expr ")" | "(" ")" ;
+binary_op = "*" | "/" | "%" | "*%" | "+" | "-" | "+%" | "-%" ;
 ```
+
+Operator precedence, from tightest to loosest:
+
+| Operators                  | Associativity |
+|----------------------------|---------------|
+| unary `-` `-%`             |               |
+| `as` `as%`                 | left          |
+| `*` `/` `%` `*%`           | left          |
+| `+` `-` `+%` `-%`          | left          |
+| `=`                        | right         |
 
 The grammar accepts more than the language allows (any number of functions, any name, any type
 name, assigning to things that aren't variables). Those restrictions are checked after parsing, so
@@ -139,16 +167,55 @@ scope, in the same block or an enclosing one. A name always refers to one thing.
 declared `mut`. Because its type is `()`, mistakes like `x = y = 5` are type errors.
 
 **Integer literals are untyped.** An integer literal is a constant with no fixed type, and takes its
-type from context: a variable's type annotation, the variable being assigned to, or a function's
-return type. Using a literal where no type can be determined is an error (for example,
-`let x = 5;`), and so is a value that doesn't fit the type it's given.
+type from context: a variable's type annotation, the variable being assigned to, a function's
+return type, the other operand of an arithmetic operator, or the target of a conversion. In
+`x + 1`, the `1` gets the type of `x`. Using a literal where no type can be determined is an error
+(for example, `let x = 5;` or `let x = 5 + 3;`), and so is a value that doesn't fit the type it's
+given.
+
+A `-` directly in front of a literal is part of the literal, so `-128` is a valid `i8` even though
+`128` on its own isn't.
+
+**Integer types** are `u8`, `u16`, `u32`, `u64` (unsigned) and `i8`, `i16`, `i32`, `i64`
+(signed, two's complement). Internally a type is "signed or unsigned, plus a bit count", so other
+widths (Zig-style `u7`, `i13`) can be added later; they will likely arrive with packed structs,
+where they matter most.
+
+**Arithmetic is checked by default.** `+`, `-`, `*`, and unary `-` trap if the result doesn't fit
+in the type, in every build mode. This is unlike Zig, where overflow on `+` is undefined behavior
+in its fastest build mode, and unlike Rust, which wraps silently in release builds. The check can be
+removed only when the compiler proves overflow impossible (not implemented yet).
+
+**Wrapping arithmetic is explicit.** `+%`, `-%`, `*%`, and unary `-%` wrap around on overflow
+instead of trapping. They are for code where wrapping is the desired behavior, or performance
+critical code where the check is too expensive.
+
+**Division** `/` rounds toward zero, and `%` is the remainder that goes with it, so `-7 / 2` is
+`-3` and `-7 % 2` is `-1`. Both trap on division by zero. For signed types both also trap on
+`MIN / -1` and `MIN % -1`, since the quotient doesn't fit. There are no wrapping forms.
+
+**Unary `-` and `-%` only apply to signed types.**
+
+**Both operands of an arithmetic operator must have the same type**, and the result has that type
+too. There are no implicit conversions between integer types, not even ones that always fit:
+`a + b` with `a: u8` and `b: u16` is an error. Following "start strict", this may be relaxed later
+for conversions that can never lose information.
+
+**Conversions** between integer types are written `value as T`, and are checked: they trap if the
+value doesn't fit in `T`. `value as% T` wraps instead, keeping the low bits of the value
+(sign-extending first when converting a signed value to a wider type). A conversion that can never
+fail, like `u8` to `u32`, is never checked.
+
+**Traps** end the process immediately, with no unwinding: nothing else in the program runs
+afterward. For now, a trap kills the process with `SIGILL`. It will become a panic that reports a
+message and the source location.
 
 **`main` returns the process exit status.** The program must contain exactly one function, named
 `main`, which takes no parameters and returns `u8`. Its return value becomes the process's exit
 status. `u8` is used because Linux only keeps the low 8 bits of an exit status, and silently
 truncating a wider value would be a hidden behavior.
 
-**Built-in types.** `u8`, an unsigned 8-bit integer, and `()`.
+**Built-in types.** The integer types, and `()`. The unit value is written `()`.
 
 ### Errors and warnings
 
@@ -158,7 +225,9 @@ The following are compile errors in this slice:
 - A return type other than `u8` for `main`, or a type name that doesn't exist.
 - An integer literal that doesn't fit in its type (for example, `256` as a `u8`), or whose type
   can't be determined.
-- A type mismatch, such as a block with no final expression where a `u8` is expected.
+- A type mismatch, such as a block with no final expression where a `u8` is expected, or
+  operands of an arithmetic operator with different types.
+- Arithmetic on `()`, negating an unsigned value, or converting anything other than an integer.
 - An expression statement whose type isn't `()`.
 - Using a variable that isn't defined, or defining a variable whose name is already in scope.
 - Assigning to a variable not declared `mut`, or to something that isn't a variable.
@@ -167,6 +236,16 @@ Warnings don't stop compilation. They flag code that is legal but probably a mis
 
 - A variable that is never read.
 - A variable declared `mut` that is never assigned to.
+
+These are checked at runtime, and trap:
+
+- Overflow in `+`, `-`, `*`, or unary `-`.
+- Division or remainder by zero, and signed `MIN / -1` or `MIN % -1`.
+- A conversion with `as` whose value doesn't fit in the target type.
+
+A constant expression that is certain to trap, like `255 + 1` as a `u8`, still compiles and traps
+at runtime. It will become a compile error once the compiler can evaluate expressions at compile
+time.
 
 ## Future Direction
 
@@ -186,3 +265,15 @@ them off.
   different signature for their entry point. To revisit once there is a second target.
 - **Calling convention / ABI.** Undecided. The bootstrap compiler uses System V for now; this is not
   a commitment.
+- **Removing overflow checks that can't fail.** When the compiler can prove an operation can't
+  overflow (for example, from the ranges of its operands), the check is dropped. Needs the planned
+  SSA optimization stage.
+- **Remarks.** A third kind of diagnostic, alongside errors and warnings, off by default and enabled
+  with a flag. Remarks report optimizations the compiler wanted to make but couldn't, and why:
+  "couldn't remove this overflow check because nothing bounds `x`". LLVM (`-Rpass-missed`) and GCC
+  (`-fopt-info-missed`) have the same idea. They would be overwhelming for a person to read
+  directly, but are useful input for tools, including AI, that help tune performance.
+- **Compile-time evaluation.** Evaluating constant expressions during compilation, so that
+  operations certain to trap become compile errors.
+- **Saturating arithmetic** (Zig's `+|`, which clamps to the type's range), if it proves useful.
+- **Arbitrary-width integers**, likely with packed structs.

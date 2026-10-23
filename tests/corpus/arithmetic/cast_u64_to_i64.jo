@@ -1,0 +1,6 @@
+// expect-trap
+// 2^63 does not fit in i64.
+fn main() -> u8 {
+    let x: u64 = 9223372036854775808;
+    (x as i64) as% u8
+}

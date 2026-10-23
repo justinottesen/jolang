@@ -1,0 +1,6 @@
+// expect-trap
+// 2^32 * 2^32 = 2^64 does not fit in u64.
+fn main() -> u8 {
+    let x: u64 = 4294967296;
+    (x * x) as% u8
+}

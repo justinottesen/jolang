@@ -1,0 +1,6 @@
+// expect-trap
+// -1 does not fit in u64.
+fn main() -> u8 {
+    let x: i8 = -1;
+    (x as u64) as% u8
+}

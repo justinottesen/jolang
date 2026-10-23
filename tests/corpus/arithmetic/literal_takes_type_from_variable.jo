@@ -1,0 +1,8 @@
+// expect-exit: 9
+// A literal on either side of an operator takes the type of the other operand.
+fn main() -> u8 {
+    let x: u8 = 3;
+    let y = x + 1;
+    let z = 5 + y;
+    z
+}

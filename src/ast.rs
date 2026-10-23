@@ -81,10 +81,60 @@ pub enum ExprKind {
     Integer,
     /// A name, which the checker resolves to a variable.
     Name(Ident),
+    /// `()`, the unit value.
+    Unit,
     /// A block: statements, then optionally a final expression that gives the block its value.
     Block { stmts: StmtRange, tail: Option<ExprId> },
     /// `target = value`.
     Assign { target: ExprId, value: ExprId },
+    Unary { op: UnaryOp, operand: ExprId },
+    Binary { op: BinaryOp, lhs: ExprId, rhs: ExprId },
+    /// `operand as ty`, or `operand as% ty` if `wrapping`.
+    Cast { operand: ExprId, ty: TypeExpr, wrapping: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnaryOp {
+    /// `-`, which traps on overflow.
+    Neg,
+    /// `-%`, which wraps on overflow.
+    WrappingNeg,
+}
+
+impl UnaryOp {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            UnaryOp::Neg => "-",
+            UnaryOp::WrappingNeg => "-%",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    WrappingAdd,
+    WrappingSub,
+    WrappingMul,
+}
+
+impl BinaryOp {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Rem => "%",
+            BinaryOp::WrappingAdd => "+%",
+            BinaryOp::WrappingSub => "-%",
+            BinaryOp::WrappingMul => "*%",
+        }
+    }
 }
 
 impl Ast {
@@ -146,10 +196,26 @@ impl Ast {
                     self.dump_expr(out, depth + 1, tail, sources);
                 }
             }
+            ExprKind::Unit => dump_line(out, depth, "unit", expr.span, sources),
             ExprKind::Assign { target, value } => {
                 dump_line(out, depth, "assign", expr.span, sources);
                 self.dump_expr(out, depth + 1, target, sources);
                 self.dump_expr(out, depth + 1, value, sources);
+            }
+            ExprKind::Unary { op, operand } => {
+                dump_line(out, depth, &format!("unary `{}`", op.symbol()), expr.span, sources);
+                self.dump_expr(out, depth + 1, operand, sources);
+            }
+            ExprKind::Binary { op, lhs, rhs } => {
+                dump_line(out, depth, &format!("binary `{}`", op.symbol()), expr.span, sources);
+                self.dump_expr(out, depth + 1, lhs, sources);
+                self.dump_expr(out, depth + 1, rhs, sources);
+            }
+            ExprKind::Cast { operand, ty, wrapping } => {
+                let label = if wrapping { "cast `as%`" } else { "cast `as`" };
+                dump_line(out, depth, label, expr.span, sources);
+                self.dump_expr(out, depth + 1, operand, sources);
+                self.dump_type(out, depth + 1, "type", ty, sources);
             }
         }
     }

@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{self, Ast, Ident, TypeExpr};
+use crate::ast::{self, Ast, Ident, TypeExpr, UnaryOp};
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::hir::{self, Hir, LocalId, Type};
+use crate::hir::{self, Hir, IntType, LocalId, Type};
 use crate::intern::{Interner, Symbol};
 use crate::source::{FileId, SourceMap, Span};
 
@@ -120,35 +120,78 @@ impl Checker<'_> {
     }
 
     fn resolve_type(&mut self, ty: TypeExpr) -> CheckResult<Type> {
-        match ty {
-            TypeExpr::Unit(_) => Ok(Type::Unit),
-            TypeExpr::Name(name) => match self.sources.text(name.span) {
-                "u8" => Ok(Type::U8),
-                text => Err(self.error(format!("unknown type `{text}`"), name.span)),
-            },
+        let name = match ty {
+            TypeExpr::Unit(_) => return Ok(Type::Unit),
+            TypeExpr::Name(name) => name,
+        };
+        let text = self.sources.text(name.span);
+        match int_type_from_name(text) {
+            Some(Ok(int)) => Ok(Type::Int(int)),
+            Some(Err(())) => {
+                let message = format!("`{text}` is not supported: integer types must be 8, 16, 32, or 64 bits for now");
+                Err(self.error(message, name.span))
+            }
+            None => Err(self.error(format!("unknown type `{text}`"), name.span)),
         }
     }
 
     /// Checks an expression that must have type `expected`.
     fn check_expr(&mut self, id: ast::ExprId, expected: Type) -> CheckResult<hir::ExprId> {
         let expr = *self.ast.expr(id);
-        match expr.kind {
+        let kind = match (expr.kind, expected) {
             // A literal takes its type from the context.
-            ast::ExprKind::Integer => {
-                let value = self.integer_value(expr.span, expected)?;
-                let kind = hir::ExprKind::Integer { value };
-                Ok(self.hir.add_expr(hir::Expr { kind, ty: expected, span: expr.span }))
+            (ast::ExprKind::Integer, _) => {
+                let value = self.integer_value(expr.span, expr.span, expected, false)?;
+                hir::ExprKind::Integer { value }
+            }
+            // `-` directly before a literal is part of the literal, so `-128` fits in an `i8`.
+            (ast::ExprKind::Unary { op: UnaryOp::Neg, operand }, Type::Int(int))
+                if int.signed && matches!(self.ast.expr(operand).kind, ast::ExprKind::Integer) =>
+            {
+                let digits = self.ast.expr(operand).span;
+                let value = self.integer_value(digits, expr.span, expected, true)?;
+                hir::ExprKind::Integer { value }
+            }
+            (ast::ExprKind::Unary { op, operand }, Type::Int(int)) => {
+                // Check the operand even if it can't be negated, to find errors in it too, and so
+                // the variables it uses count as used.
+                let operand = self.check_expr(operand, expected);
+                if !int.signed {
+                    return Err(self.error(format!("cannot negate a value of unsigned type `{int}`"), expr.span));
+                }
+                hir::ExprKind::Unary { op, operand: operand? }
+            }
+            // Both operands have the result's type.
+            (ast::ExprKind::Binary { op, lhs, rhs }, Type::Int(_)) => {
+                let lhs = self.check_expr(lhs, expected);
+                let rhs = self.check_expr(rhs, expected);
+                hir::ExprKind::Binary { op, lhs: lhs?, rhs: rhs? }
             }
             // The expected type passes through to the block's final expression.
-            ast::ExprKind::Block { stmts, tail } => self.check_block(expr.span, stmts, tail, Some(expected)),
-            ast::ExprKind::Name(_) | ast::ExprKind::Assign { .. } => {
+            (ast::ExprKind::Block { stmts, tail }, _) => {
+                return self.check_block(expr.span, stmts, tail, Some(expected));
+            }
+            // Anything else has a type of its own, which must match.
+            _ => {
                 let id = self.infer_expr(id)?;
                 let found = self.hir.expr(id).ty;
                 if found != expected {
                     return Err(self.error(format!("expected `{expected}`, found `{found}`"), expr.span));
                 }
-                Ok(id)
+                return Ok(id);
             }
+        };
+        Ok(self.hir.add_expr(hir::Expr { kind, ty: expected, span: expr.span }))
+    }
+
+    /// Whether an expression gets its type from context, rather than having one of its own: a
+    /// literal, or arithmetic on only literals.
+    fn needs_context(&self, id: ast::ExprId) -> bool {
+        match self.ast.expr(id).kind {
+            ast::ExprKind::Integer => true,
+            ast::ExprKind::Unary { operand, .. } => self.needs_context(operand),
+            ast::ExprKind::Binary { lhs, rhs, .. } => self.needs_context(lhs) && self.needs_context(rhs),
+            _ => false,
         }
     }
 
@@ -169,8 +212,48 @@ impl Checker<'_> {
                 self.function.usage[local.0 as usize].read = true;
                 (hir::ExprKind::Local(local), self.function.locals[local.0 as usize].ty)
             }
+            ast::ExprKind::Unit => (hir::ExprKind::Unit, Type::Unit),
             ast::ExprKind::Block { stmts, tail } => return self.check_block(expr.span, stmts, tail, None),
             ast::ExprKind::Assign { target, value } => (self.check_assign(target, value)?, Type::Unit),
+            ast::ExprKind::Unary { op, operand } => {
+                let operand = self.infer_expr(operand)?;
+                let ty = self.hir.expr(operand).ty;
+                match ty {
+                    Type::Int(int) if int.signed => (hir::ExprKind::Unary { op, operand }, ty),
+                    Type::Int(int) => {
+                        return Err(self.error(format!("cannot negate a value of unsigned type `{int}`"), expr.span));
+                    }
+                    Type::Unit => return Err(self.error("cannot negate a value of type `()`", expr.span)),
+                }
+            }
+            ast::ExprKind::Binary { op, lhs, rhs } => {
+                // Infer whichever operand has a type of its own, and check the other against it. So
+                // in `1 + x`, the `1` takes its type from `x`.
+                let swap = self.needs_context(lhs) && !self.needs_context(rhs);
+                let (first, second) = if swap { (rhs, lhs) } else { (lhs, rhs) };
+                let first = self.infer_expr(first)?;
+                let ty = self.hir.expr(first).ty;
+                if !matches!(ty, Type::Int(_)) {
+                    let message = format!("operator `{}` cannot be applied to type `{ty}`", op.symbol());
+                    return Err(self.error(message, expr.span));
+                }
+                let second = self.check_expr(second, ty)?;
+                let (lhs, rhs) = if swap { (second, first) } else { (first, second) };
+                (hir::ExprKind::Binary { op, lhs, rhs }, ty)
+            }
+            ast::ExprKind::Cast { operand, ty, wrapping } => {
+                let target = self.resolve_type(ty)?;
+                // A literal being converted takes the target type, so `300 as u8` is an error
+                // rather than a trap.
+                let operand =
+                    if self.needs_context(operand) { self.check_expr(operand, target)? } else { self.infer_expr(operand)? };
+                let from = self.hir.expr(operand).ty;
+                if !matches!((from, target), (Type::Int(_), Type::Int(_))) {
+                    let message = format!("cannot convert `{from}` to `{target}`: only integers can be converted");
+                    return Err(self.error(message, expr.span));
+                }
+                (hir::ExprKind::Cast { operand, wrapping }, target)
+            }
         };
         Ok(self.hir.add_expr(hir::Expr { kind, ty, span: expr.span }))
     }
@@ -330,21 +413,46 @@ impl Checker<'_> {
         }
     }
 
-    /// Parses an integer literal's value, and checks that it fits in `ty`.
-    fn integer_value(&mut self, span: Span, ty: Type) -> CheckResult<u128> {
-        let text = self.sources.text(span);
-        let Some(max) = ty.max_value() else {
+    /// Parses an integer literal's value, negated if `negative`, and checks that it fits in `ty`.
+    /// `digits` is the literal itself, and `span` is the whole expression, including any `-`.
+    fn integer_value(&mut self, digits: Span, span: Span, ty: Type, negative: bool) -> CheckResult<i128> {
+        let text = format!("{}{}", if negative { "-" } else { "" }, self.sources.text(digits));
+        let Type::Int(int) = ty else {
             return Err(self.error(format!("expected `{ty}`, found integer `{text}`"), span));
         };
-        // The lexer guarantees the literal is only decimal digits. Overflowing a `u128` means it's
+        // The lexer guarantees the literal is only decimal digits. Overflowing an `i128` means it's
         // too large for any type.
-        let value = text
+        let magnitude = self
+            .sources
+            .text(digits)
             .bytes()
-            .try_fold(0u128, |value, digit| value.checked_mul(10)?.checked_add((digit - b'0').into()));
+            .try_fold(0i128, |value, digit| value.checked_mul(10)?.checked_add((digit - b'0').into()));
+        let value = magnitude.map(|magnitude| if negative { -magnitude } else { magnitude });
         match value {
-            Some(value) if value <= max => Ok(value),
-            _ => Err(self.error(format!("`{text}` does not fit in `{ty}` (range 0 to {max})"), span)),
+            Some(value) if int.min() <= value && value <= int.max() => Ok(value),
+            _ => {
+                let message = format!("`{text}` does not fit in `{ty}` (range {} to {})", int.min(), int.max());
+                Err(self.error(message, span))
+            }
         }
+    }
+}
+
+/// Parses an integer type name like `u8` or `i32`. Returns `None` if the name isn't an integer
+/// type at all, and `Some(Err(()))` for an integer type with an unsupported width, like `u7`.
+fn int_type_from_name(name: &str) -> Option<Result<IntType, ()>> {
+    let signed = match name.as_bytes().first()? {
+        b'u' => false,
+        b'i' => true,
+        _ => return None,
+    };
+    let bits = &name[1..];
+    if bits.is_empty() || !bits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    match bits {
+        "8" | "16" | "32" | "64" => Some(Ok(IntType { signed, bits: bits.parse().unwrap() })),
+        _ => Some(Err(())),
     }
 }
 
@@ -421,7 +529,8 @@ mod tests {
     #[test]
     fn program_rules() {
         assert_eq!(diagnostics(""), ["error: no `main` function"]);
-        assert_eq!(diagnostics("fn main() -> i32 { 0 }"), ["error: unknown type `i32`"]);
+        assert_eq!(diagnostics("fn main() -> Foo { 0 }"), ["error: unknown type `Foo`"]);
+        assert_eq!(diagnostics("fn main() -> i32 { 0 }"), ["error: `main` must return `u8`, not `i32`"]);
         assert_eq!(diagnostics("fn main() -> () { }"), ["error: `main` must return `u8`, not `()`"]);
         assert_eq!(
             diagnostics("fn main() -> u8 { 0 } fn main() -> u8 { 0 }"),
@@ -437,9 +546,9 @@ mod tests {
     #[test]
     fn reports_every_error() {
         assert_eq!(
-            diagnostics("fn main() -> i32 { 0 } fn other() -> u8 { 300 }"),
+            diagnostics("fn main() -> Foo { 0 } fn other() -> u8 { 300 }"),
             [
-                "error: unknown type `i32`",
+                "error: unknown type `Foo`",
                 "error: functions other than `main` are not supported yet",
                 "error: `300` does not fit in `u8` (range 0 to 255)",
             ]
@@ -528,7 +637,7 @@ mod tests {
             diagnostics("fn main() -> u8 { let x = 5; x }"),
             ["error: cannot infer the type of integer `5`; it needs a type from its context, such as a type annotation"]
         );
-        assert_eq!(diagnostics("fn main() -> u8 { let x: i32 = 5; x }"), ["error: unknown type `i32`"]);
+        assert_eq!(diagnostics("fn main() -> u8 { let x: Foo = 5; x }"), ["error: unknown type `Foo`"]);
     }
 
     #[test]
@@ -546,6 +655,81 @@ mod tests {
                 "error: cannot assign to `x`, because it is not declared `mut`",
                 "error: `300` does not fit in `u8` (range 0 to 255)",
             ]
+        );
+    }
+
+    #[test]
+    fn integer_types() {
+        assert!(diagnostics("fn main() -> u8 { let a: i8 = -128; let b: i8 = 127; (a +% b) as% u8 }").is_empty());
+        assert!(diagnostics("fn main() -> u8 { let a: u64 = 18446744073709551615; a as% u8 }").is_empty());
+        assert!(diagnostics("fn main() -> u8 { let a: i64 = -9223372036854775808; a as% u8 }").is_empty());
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let a: i8 = -129; a as% u8 }"),
+            ["error: `-129` does not fit in `i8` (range -128 to 127)"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let a: i8 = 128; a as% u8 }"),
+            ["error: `128` does not fit in `i8` (range -128 to 127)"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let a: u7 = 1; a as% u8 }"),
+            ["error: `u7` is not supported: integer types must be 8, 16, 32, or 64 bits for now"]
+        );
+        assert_eq!(diagnostics("fn main() -> u8 { let a: i = 1; a as% u8 }"), ["error: unknown type `i`"]);
+    }
+
+    #[test]
+    fn arithmetic() {
+        assert!(diagnostics("fn main() -> u8 { let x: u8 = 1; x + 2 }").is_empty());
+        // A literal on the left takes its type from the right.
+        assert!(diagnostics("fn main() -> u8 { let x: u8 = 1; let y = 2 + x; y }").is_empty());
+        assert!(diagnostics("fn main() -> u8 { (1 + 2) * 3 / 4 % 5 -% 6 }").is_empty());
+        assert!(diagnostics("fn main() -> u8 { let x: u16 = 300; (x * 2 - 1) as u8 }").is_empty());
+        assert!(diagnostics("fn main() -> u8 { let x: i32 = 5; (-x + 10 -% -%x) as u8 }").is_empty());
+
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let a: u8 = 1; let b: u16 = 2; a + b }"),
+            ["error: expected `u8`, found `u16`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let a: u8 = 1; let b: u16 = 2; let c = a + b; c }"),
+            ["error: expected `u8`, found `u16`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let x = 1 + 2; x }"),
+            ["error: cannot infer the type of integer `1`; it needs a type from its context, such as a type annotation"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let u: () = (); let v = u + u; v; 0 }"),
+            ["error: operator `+` cannot be applied to type `()`"]
+        );
+    }
+
+    #[test]
+    fn negation() {
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let x: u8 = 1; -x }"),
+            ["error: cannot negate a value of unsigned type `u8`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let x: u8 = 1; let y = -%x; y }"),
+            ["error: cannot negate a value of unsigned type `u8`"]
+        );
+        assert_eq!(diagnostics("fn main() -> u8 { -1 }"), ["error: cannot negate a value of unsigned type `u8`"]);
+    }
+
+    #[test]
+    fn conversions() {
+        assert!(diagnostics("fn main() -> u8 { let x: i64 = -1; x as% u8 }").is_empty());
+        // A literal takes the target type, so an out-of-range literal is a compile error.
+        assert_eq!(diagnostics("fn main() -> u8 { 300 as u8 }"), ["error: `300` does not fit in `u8` (range 0 to 255)"]);
+        assert_eq!(
+            diagnostics("fn main() -> u8 { () as u8 }"),
+            ["error: cannot convert `()` to `u8`: only integers can be converted"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let x: u8 = 1; let y: () = x as (); y; 0 }"),
+            ["error: cannot convert `u8` to `()`: only integers can be converted"]
         );
     }
 

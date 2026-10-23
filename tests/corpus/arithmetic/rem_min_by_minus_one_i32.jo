@@ -1,0 +1,6 @@
+// expect-trap
+// i32::MIN % -1 traps like i32::MIN / -1 does.
+fn main() -> u8 {
+    let x: i32 = -2147483648;
+    (x % -1) as% u8
+}

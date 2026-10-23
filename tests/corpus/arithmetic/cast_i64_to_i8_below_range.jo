@@ -1,0 +1,6 @@
+// expect-trap
+// -129 does not fit in i8.
+fn main() -> u8 {
+    let x: i64 = -129;
+    (x as i8) as% u8
+}

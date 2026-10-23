@@ -87,13 +87,24 @@ struct Diagnostic {
     message: String,
 }
 
+/// How a program that compiles should end when run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    Exit(u8),
+    /// Killed by a failed runtime check.
+    Trap,
+}
+
 struct Directives {
-    exit: Option<u8>,
+    outcome: Option<Outcome>,
     diagnostics: Vec<Diagnostic>,
 }
 
+/// The signal a trap kills the process with: `ud2` raises `SIGILL`.
+const TRAP_SIGNAL: i32 = 4;
+
 fn parse_directives(source: &str) -> Result<Directives, String> {
-    let mut directives = Directives { exit: None, diagnostics: Vec::new() };
+    let mut directives = Directives { outcome: None, diagnostics: Vec::new() };
     for (i, line) in source.lines().enumerate() {
         let Some((_, comment)) = line.split_once("//") else { continue };
         let comment = comment.trim();
@@ -102,11 +113,18 @@ fn parse_directives(source: &str) -> Result<Directives, String> {
             line: Some(i + 1),
             message: message.trim().to_string(),
         };
-        if let Some(status) = comment.strip_prefix("expect-exit:") {
+        let outcome = if let Some(status) = comment.strip_prefix("expect-exit:") {
             let status = status.trim();
             let status = status.parse().map_err(|_| format!("line {}: invalid exit status `{status}`", i + 1))?;
-            if directives.exit.replace(status).is_some() {
-                return Err(format!("line {}: more than one `expect-exit`", i + 1));
+            Some(Outcome::Exit(status))
+        } else if comment == "expect-trap" {
+            Some(Outcome::Trap)
+        } else {
+            None
+        };
+        if let Some(outcome) = outcome {
+            if directives.outcome.replace(outcome).is_some() {
+                return Err(format!("line {}: more than one `expect-exit` or `expect-trap`", i + 1));
             }
         } else if let Some(message) = comment.strip_prefix("expect-error:") {
             directives.diagnostics.push(expect_diagnostic(Severity::Error, message));
@@ -124,11 +142,11 @@ fn check(path: &Path, name: &str) -> Result<(), String> {
     let source = fs::read_to_string(path).map_err(|err| format!("cannot read file: {err}"))?;
     let directives = parse_directives(&source)?;
     let expects_errors = directives.diagnostics.iter().any(|d| d.severity == Severity::Error);
-    if directives.exit.is_some() && expects_errors {
-        return Err("`expect-exit` and `expect-error` cannot be used in the same file".into());
+    if directives.outcome.is_some() && expects_errors {
+        return Err("`expect-exit` or `expect-trap` cannot be used with `expect-error`".into());
     }
-    if directives.exit.is_none() && !expects_errors {
-        return Err("needs `// expect-exit: <status>` or at least one `// expect-error: <message>`".into());
+    if directives.outcome.is_none() && !expects_errors {
+        return Err("needs `// expect-exit: <status>`, `// expect-trap`, or at least one `// expect-error: <message>`".into());
     }
 
     let executable = Path::new(OUTPUT_DIR).join(name).with_extension("");
@@ -146,7 +164,7 @@ fn check(path: &Path, name: &str) -> Result<(), String> {
     compare_diagnostics(directives.diagnostics, reported_diagnostics(&stderr))
         .map_err(|problems| format!("{problems}\ncompiler output:\n{stderr}"))?;
 
-    let Some(expected) = directives.exit else {
+    let Some(expected) = directives.outcome else {
         if output.status.success() {
             return Err("expected errors, but compilation succeeded".into());
         }
@@ -158,12 +176,17 @@ fn check(path: &Path, name: &str) -> Result<(), String> {
     let status = Command::new(&executable)
         .status()
         .map_err(|err| format!("cannot run {}: {err}", executable.display()))?;
-    match (status.code(), status.signal()) {
-        (Some(code), _) if code == i32::from(expected) => Ok(()),
-        (Some(code), _) => Err(format!("expected exit status {expected}, got {code}")),
-        (None, Some(signal)) => Err(format!("expected exit status {expected}, but killed by signal {signal}")),
-        (None, None) => Err(format!("expected exit status {expected}, but it did not exit normally")),
-    }
+    let actual = match (status.code(), status.signal()) {
+        (Some(code), _) => format!("exit status {code}"),
+        (None, Some(TRAP_SIGNAL)) => "a trap".to_string(),
+        (None, Some(signal)) => format!("killed by signal {signal}"),
+        (None, None) => "abnormal termination".to_string(),
+    };
+    let wanted = match expected {
+        Outcome::Exit(code) => format!("exit status {code}"),
+        Outcome::Trap => "a trap".to_string(),
+    };
+    if actual == wanted { Ok(()) } else { Err(format!("expected {wanted}, got {actual}")) }
 }
 
 /// Extracts diagnostics from compiler output. A located diagnostic looks like:

@@ -1,0 +1,6 @@
+// expect-trap
+// Division by zero.
+fn main() -> u8 {
+    let x: u8 = 0;
+    1 / x
+}

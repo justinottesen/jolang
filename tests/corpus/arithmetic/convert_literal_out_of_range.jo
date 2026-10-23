@@ -1,0 +1,4 @@
+// A literal being converted takes the target type, so this is caught at compile time.
+fn main() -> u8 {
+    300 as u8  // expect-error: `300` does not fit in `u8`
+}

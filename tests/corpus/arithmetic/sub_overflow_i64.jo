@@ -1,0 +1,6 @@
+// expect-trap
+// i64::MIN - 1.
+fn main() -> u8 {
+    let x: i64 = -9223372036854775808;
+    (x - 1) as% u8
+}
