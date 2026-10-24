@@ -13,7 +13,10 @@ const OUTPUT_DIR: &str = concat!(env!("CARGO_TARGET_TMPDIR"), "/corpus");
 
 fn main() -> ExitCode {
     // Like the standard test harness, any non-flag arguments are filters on the test name.
-    let filters: Vec<String> = std::env::args().skip(1).filter(|arg| !arg.starts_with('-')).collect();
+    let filters: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect();
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
     let mut files = Vec::new();
@@ -48,11 +51,16 @@ fn main() -> ExitCode {
         println!("no programs found in {}", root.display());
         return ExitCode::FAILURE;
     }
-    if failures.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    if failures.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 fn find_programs(dir: &Path, files: &mut Vec<PathBuf>) {
-    let entries = fs::read_dir(dir).unwrap_or_else(|err| panic!("cannot read {}: {err}", dir.display()));
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|err| panic!("cannot read {}: {err}", dir.display()));
     for entry in entries {
         let path = entry.unwrap().path();
         if path.is_dir() {
@@ -104,9 +112,14 @@ struct Directives {
 const TRAP_SIGNAL: i32 = 4;
 
 fn parse_directives(source: &str) -> Result<Directives, String> {
-    let mut directives = Directives { outcome: None, diagnostics: Vec::new() };
+    let mut directives = Directives {
+        outcome: None,
+        diagnostics: Vec::new(),
+    };
     for (i, line) in source.lines().enumerate() {
-        let Some((_, comment)) = line.split_once("//") else { continue };
+        let Some((_, comment)) = line.split_once("//") else {
+            continue;
+        };
         let comment = comment.trim();
         let expect_diagnostic = |severity, message: &str| Diagnostic {
             severity,
@@ -115,7 +128,9 @@ fn parse_directives(source: &str) -> Result<Directives, String> {
         };
         let outcome = if let Some(status) = comment.strip_prefix("expect-exit:") {
             let status = status.trim();
-            let status = status.parse().map_err(|_| format!("line {}: invalid exit status `{status}`", i + 1))?;
+            let status = status
+                .parse()
+                .map_err(|_| format!("line {}: invalid exit status `{status}`", i + 1))?;
             Some(Outcome::Exit(status))
         } else if comment == "expect-trap" {
             Some(Outcome::Trap)
@@ -124,12 +139,19 @@ fn parse_directives(source: &str) -> Result<Directives, String> {
         };
         if let Some(outcome) = outcome {
             if directives.outcome.replace(outcome).is_some() {
-                return Err(format!("line {}: more than one `expect-exit` or `expect-trap`", i + 1));
+                return Err(format!(
+                    "line {}: more than one `expect-exit` or `expect-trap`",
+                    i + 1
+                ));
             }
         } else if let Some(message) = comment.strip_prefix("expect-error:") {
-            directives.diagnostics.push(expect_diagnostic(Severity::Error, message));
+            directives
+                .diagnostics
+                .push(expect_diagnostic(Severity::Error, message));
         } else if let Some(message) = comment.strip_prefix("expect-warning:") {
-            directives.diagnostics.push(expect_diagnostic(Severity::Warning, message));
+            directives
+                .diagnostics
+                .push(expect_diagnostic(Severity::Warning, message));
         } else if comment.starts_with("expect") {
             return Err(format!("line {}: unknown directive `{comment}`", i + 1));
         }
@@ -141,7 +163,10 @@ fn parse_directives(source: &str) -> Result<Directives, String> {
 fn check(path: &Path, name: &str) -> Result<(), String> {
     let source = fs::read_to_string(path).map_err(|err| format!("cannot read file: {err}"))?;
     let directives = parse_directives(&source)?;
-    let expects_errors = directives.diagnostics.iter().any(|d| d.severity == Severity::Error);
+    let expects_errors = directives
+        .diagnostics
+        .iter()
+        .any(|d| d.severity == Severity::Error);
     if directives.outcome.is_some() && expects_errors {
         return Err("`expect-exit` or `expect-trap` cannot be used with `expect-error`".into());
     }
@@ -150,7 +175,8 @@ fn check(path: &Path, name: &str) -> Result<(), String> {
     }
 
     let executable = Path::new(OUTPUT_DIR).join(name).with_extension("");
-    fs::create_dir_all(executable.parent().unwrap()).map_err(|err| format!("cannot create output directory: {err}"))?;
+    fs::create_dir_all(executable.parent().unwrap())
+        .map_err(|err| format!("cannot create output directory: {err}"))?;
     let output = Command::new(COMPILER)
         .arg(path)
         .arg("-o")
@@ -171,7 +197,9 @@ fn check(path: &Path, name: &str) -> Result<(), String> {
         return Ok(());
     };
     if !output.status.success() {
-        return Err(format!("expected to compile, but compilation failed:\n{stderr}"));
+        return Err(format!(
+            "expected to compile, but compilation failed:\n{stderr}"
+        ));
     }
     let status = Command::new(&executable)
         .status()
@@ -186,7 +214,11 @@ fn check(path: &Path, name: &str) -> Result<(), String> {
         Outcome::Exit(code) => format!("exit status {code}"),
         Outcome::Trap => "a trap".to_string(),
     };
-    if actual == wanted { Ok(()) } else { Err(format!("expected {wanted}, got {actual}")) }
+    if actual == wanted {
+        Ok(())
+    } else {
+        Err(format!("expected {wanted}, got {actual}"))
+    }
 }
 
 /// Extracts diagnostics from compiler output. A located diagnostic looks like:
@@ -200,10 +232,16 @@ fn reported_diagnostics(stderr: &str) -> Vec<Diagnostic> {
     for line in stderr.lines() {
         let severity_and_message = match line.strip_prefix("error: ") {
             Some(message) => Some((Severity::Error, message)),
-            None => line.strip_prefix("warning: ").map(|message| (Severity::Warning, message)),
+            None => line
+                .strip_prefix("warning: ")
+                .map(|message| (Severity::Warning, message)),
         };
         if let Some((severity, message)) = severity_and_message {
-            diagnostics.push(Diagnostic { severity, line: None, message: message.to_string() });
+            diagnostics.push(Diagnostic {
+                severity,
+                line: None,
+                message: message.to_string(),
+            });
         } else if let Some(location) = line.trim_start().strip_prefix("--> ") {
             // The location is `path:line:column`; split from the right in case the path has colons.
             let line_number = location.rsplit(':').nth(1).and_then(|n| n.parse().ok());
@@ -217,11 +255,16 @@ fn reported_diagnostics(stderr: &str) -> Vec<Diagnostic> {
 
 /// Pairs each expected diagnostic with a reported one. Fails with a description of every expected
 /// diagnostic that wasn't reported, and every reported diagnostic that wasn't expected.
-fn compare_diagnostics(expected: Vec<Diagnostic>, mut reported: Vec<Diagnostic>) -> Result<(), String> {
+fn compare_diagnostics(
+    expected: Vec<Diagnostic>,
+    mut reported: Vec<Diagnostic>,
+) -> Result<(), String> {
     let mut problems = String::new();
     for want in expected {
         let found = reported.iter().position(|got| {
-            got.severity == want.severity && got.line == want.line && got.message.contains(&want.message)
+            got.severity == want.severity
+                && got.line == want.line
+                && got.message.contains(&want.message)
         });
         match found {
             Some(i) => {
@@ -229,17 +272,26 @@ fn compare_diagnostics(expected: Vec<Diagnostic>, mut reported: Vec<Diagnostic>)
             }
             None => {
                 let line = want.line.unwrap();
-                problems += &format!("missing {} on line {line}: {}\n", want.severity.name(), want.message);
+                problems += &format!(
+                    "missing {} on line {line}: {}\n",
+                    want.severity.name(),
+                    want.message
+                );
             }
         }
     }
     for got in reported {
         let severity = got.severity.name();
         match got.line {
-            Some(line) => problems += &format!("unexpected {severity} on line {line}: {}\n", got.message),
+            Some(line) => {
+                problems += &format!("unexpected {severity} on line {line}: {}\n", got.message)
+            }
             None => problems += &format!("unexpected {severity}: {}\n", got.message),
         }
     }
-    if problems.is_empty() { Ok(()) } else { Err(problems) }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
 }
-

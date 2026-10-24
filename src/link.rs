@@ -34,9 +34,14 @@ fn assemble(assembly: &str, object: &Path) -> Result<(), String> {
         .unwrap()
         .write_all(assembly.as_bytes())
         .map_err(|err| format!("could not send assembly to `as`: {err}"))?;
-    let result = child.wait_with_output().map_err(|err| format!("could not run the assembler `as`: {err}"))?;
+    let result = child
+        .wait_with_output()
+        .map_err(|err| format!("could not run the assembler `as`: {err}"))?;
     if !result.status.success() {
-        return Err(format!("the assembler failed:\n{}", String::from_utf8_lossy(&result.stderr)));
+        return Err(format!(
+            "the assembler failed:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        ));
     }
     Ok(())
 }
@@ -50,7 +55,10 @@ fn link(object: &Path, output: &Path) -> Result<(), String> {
         .output()
         .map_err(|err| format!("could not run the linker `ld`: {err}"))?;
     if !result.status.success() {
-        return Err(format!("the linker failed:\n{}", String::from_utf8_lossy(&result.stderr)));
+        return Err(format!(
+            "the linker failed:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        ));
     }
     Ok(())
 }

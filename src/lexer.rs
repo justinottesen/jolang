@@ -108,7 +108,13 @@ pub struct Token {
 /// Lexes an entire file. Invalid input is reported and skipped, so every error in the file is
 /// found in one pass.
 pub fn lex(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
-    let mut lexer = Lexer { file, text, pos: 0, tokens: Vec::new(), diagnostics: Vec::new() };
+    let mut lexer = Lexer {
+        file,
+        text,
+        pos: 0,
+        tokens: Vec::new(),
+        diagnostics: Vec::new(),
+    };
     lexer.run();
     (lexer.tokens, lexer.diagnostics)
 }
@@ -158,7 +164,11 @@ impl Lexer<'_> {
     }
 
     fn span(&self, start: usize) -> Span {
-        Span { file: self.file, start: start as u32, end: self.pos as u32 }
+        Span {
+            file: self.file,
+            start: start as u32,
+            end: self.pos as u32,
+        }
     }
 
     /// Pushes a token covering everything from `start` to the current position.
@@ -243,7 +253,10 @@ impl Lexer<'_> {
         // Skip the whole character, which may be more than one byte.
         let c = self.text[start..].chars().next().unwrap();
         self.pos += c.len_utf8();
-        self.diagnostics.push(Diagnostic::error(format!("invalid character {c:?}"), self.span(start)));
+        self.diagnostics.push(Diagnostic::error(
+            format!("invalid character {c:?}"),
+            self.span(start),
+        ));
     }
 }
 
@@ -265,7 +278,10 @@ mod tests {
 
     fn kinds(text: &str) -> Vec<TokenKind> {
         let (tokens, diagnostics, _) = lex_str(text);
-        assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
         tokens.iter().map(|t| t.kind).collect()
     }
 
@@ -274,7 +290,9 @@ mod tests {
         use TokenKind::*;
         assert_eq!(
             kinds("fn main() -> u8 { 0 }"),
-            [Fn, Ident, LParen, RParen, Arrow, Ident, LBrace, Integer, RBrace, Eof]
+            [
+                Fn, Ident, LParen, RParen, Arrow, Ident, LBrace, Integer, RBrace, Eof
+            ]
         );
     }
 
@@ -282,7 +300,10 @@ mod tests {
     fn token_text() {
         let (tokens, _, sources) = lex_str("fn main() -> u8 { 42 }");
         let texts: Vec<&str> = tokens.iter().map(|t| sources.text(t.span)).collect();
-        assert_eq!(texts, ["fn", "main", "(", ")", "->", "u8", "{", "42", "}", ""]);
+        assert_eq!(
+            texts,
+            ["fn", "main", "(", ")", "->", "u8", "{", "42", "}", ""]
+        );
     }
 
     #[test]
@@ -290,7 +311,10 @@ mod tests {
         use TokenKind::*;
         assert_eq!(
             kinds("let mut x: u8 = 1; x = y;"),
-            [Let, Mut, Ident, Colon, Ident, Eq, Integer, Semicolon, Ident, Eq, Ident, Semicolon, Eof]
+            [
+                Let, Mut, Ident, Colon, Ident, Eq, Integer, Semicolon, Ident, Eq, Ident, Semicolon,
+                Eof
+            ]
         );
         assert_eq!(kinds("letter mutable"), [Ident, Ident, Eof]);
     }
@@ -300,7 +324,20 @@ mod tests {
         use TokenKind::*;
         assert_eq!(
             kinds("+ - * / % +% -% *% as as% -> //"),
-            [Plus, Minus, Star, Slash, Percent, PlusPercent, MinusPercent, StarPercent, As, AsPercent, Arrow, Eof]
+            [
+                Plus,
+                Minus,
+                Star,
+                Slash,
+                Percent,
+                PlusPercent,
+                MinusPercent,
+                StarPercent,
+                As,
+                AsPercent,
+                Arrow,
+                Eof
+            ]
         );
         // `%` only joins an operator when it immediately follows it.
         assert_eq!(kinds("a + %b"), [Ident, Plus, Percent, Ident, Eof]);
@@ -312,13 +349,19 @@ mod tests {
     #[test]
     fn comparisons_and_logic() {
         use TokenKind::*;
-        assert_eq!(kinds("= == ! != < <= > >= ->"), [Eq, EqEq, Bang, NotEq, Lt, Le, Gt, Ge, Arrow, Eof]);
+        assert_eq!(
+            kinds("= == ! != < <= > >= ->"),
+            [Eq, EqEq, Bang, NotEq, Lt, Le, Gt, Ge, Arrow, Eof]
+        );
         assert_eq!(kinds("a===b"), [Ident, EqEq, Eq, Ident, Eof]);
         assert_eq!(
             kinds("if else true false and or"),
             [If, Else, True, False, And, Or, Eof]
         );
-        assert_eq!(kinds("iffy elsewhere android order"), [Ident, Ident, Ident, Ident, Eof]);
+        assert_eq!(
+            kinds("iffy elsewhere android order"),
+            [Ident, Ident, Ident, Ident, Eof]
+        );
     }
 
     #[test]
@@ -329,7 +372,10 @@ mod tests {
     #[test]
     fn whitespace_and_comments() {
         use TokenKind::*;
-        assert_eq!(kinds("// comment\n\tfn\r\n// another\n// at end"), [Fn, Eof]);
+        assert_eq!(
+            kinds("// comment\n\tfn\r\n// another\n// at end"),
+            [Fn, Eof]
+        );
     }
 
     #[test]

@@ -19,11 +19,19 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn error(message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { severity: Severity::Error, message: message.into(), span }
+        Diagnostic {
+            severity: Severity::Error,
+            message: message.into(),
+            span,
+        }
     }
 
     pub fn warning(message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { severity: Severity::Warning, message: message.into(), span }
+        Diagnostic {
+            severity: Severity::Warning,
+            message: message.into(),
+            span,
+        }
     }
 
     /// Formats the diagnostic with the source line it points at, for example:
@@ -56,7 +64,13 @@ impl Diagnostic {
 
         // Underline the part of the span on this line, with at least one marker so empty spans
         // (like the end of the file) are still visible.
-        let span_chars = sources.text(self.span).lines().next().unwrap_or("").chars().count();
+        let span_chars = sources
+            .text(self.span)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .count();
         let markers = "^".repeat(span_chars.max(1));
 
         format!(

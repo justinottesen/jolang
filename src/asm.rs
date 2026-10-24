@@ -40,7 +40,11 @@ pub enum Operand {
     Reg(Reg, Size),
     Imm(i64),
     /// The memory at `[base + offset]`.
-    Mem { base: Reg, offset: i32, size: Size },
+    Mem {
+        base: Reg,
+        offset: i32,
+        size: Size,
+    },
 }
 
 /// A condition for a conditional jump, based on the flags set by the previous instruction.
@@ -75,16 +79,34 @@ pub enum Cond {
 #[derive(Clone, Debug)]
 pub enum Inst {
     Label(String),
-    Mov { dst: Operand, src: Operand },
+    Mov {
+        dst: Operand,
+        src: Operand,
+    },
     /// Move with zero extension, from a smaller operand to a larger register.
-    Movzx { dst: Operand, src: Operand },
+    Movzx {
+        dst: Operand,
+        src: Operand,
+    },
     /// Move with sign extension, from a smaller operand to a larger register.
-    Movsx { dst: Operand, src: Operand },
-    Add { dst: Operand, src: Operand },
-    Sub { dst: Operand, src: Operand },
+    Movsx {
+        dst: Operand,
+        src: Operand,
+    },
+    Add {
+        dst: Operand,
+        src: Operand,
+    },
+    Sub {
+        dst: Operand,
+        src: Operand,
+    },
     /// Signed multiply, keeping the low half of the product. The low half is the same for signed
     /// and unsigned operands; only the overflow flag is signed.
-    Imul { dst: Operand, src: Operand },
+    Imul {
+        dst: Operand,
+        src: Operand,
+    },
     /// Unsigned multiply of `rax` by the operand, into `rdx:rax`.
     Mul(Operand),
     /// Unsigned divide of `rdx:rax` by the operand: quotient in `rax`, remainder in `rdx`.
@@ -92,9 +114,18 @@ pub enum Inst {
     /// Signed divide of `rdx:rax` by the operand: quotient in `rax`, remainder in `rdx`.
     Idiv(Operand),
     Neg(Operand),
-    Cmp { lhs: Operand, rhs: Operand },
-    Test { lhs: Operand, rhs: Operand },
-    Xor { dst: Operand, src: Operand },
+    Cmp {
+        lhs: Operand,
+        rhs: Operand,
+    },
+    Test {
+        lhs: Operand,
+        rhs: Operand,
+    },
+    Xor {
+        dst: Operand,
+        src: Operand,
+    },
     /// Sign-extends `eax` into `edx`, for a 32-bit `idiv`.
     Cdq,
     /// Sign-extends `rax` into `rdx`, for a 64-bit `idiv`.
@@ -140,7 +171,8 @@ pub fn print(functions: &[Function]) -> String {
 }
 
 fn print_inst(out: &mut String, inst: &Inst) {
-    let two = |name: &str, a: &Operand, b: &Operand| format!("{name} {}, {}", operand(*a), operand(*b));
+    let two =
+        |name: &str, a: &Operand, b: &Operand| format!("{name} {}, {}", operand(*a), operand(*b));
     let text = match inst {
         Inst::Label(name) => {
             writeln!(out, "{name}:").unwrap();
@@ -149,9 +181,14 @@ fn print_inst(out: &mut String, inst: &Inst) {
         Inst::Mov { dst, src } => two("mov", dst, src),
         Inst::Movzx { dst, src } => two("movzx", dst, src),
         // Sign-extending from 32 bits has its own mnemonic.
-        Inst::Movsx { dst, src: src @ (Operand::Mem { size: Size::Dword, .. } | Operand::Reg(_, Size::Dword)) } => {
-            two("movsxd", dst, src)
-        }
+        Inst::Movsx {
+            dst,
+            src:
+                src @ (Operand::Mem {
+                    size: Size::Dword, ..
+                }
+                | Operand::Reg(_, Size::Dword)),
+        } => two("movsxd", dst, src),
         Inst::Movsx { dst, src } => two("movsx", dst, src),
         Inst::Add { dst, src } => two("add", dst, src),
         Inst::Sub { dst, src } => two("sub", dst, src),
@@ -244,7 +281,11 @@ mod tests {
         assert_eq!(operand(Operand::Reg(Reg::Rdi, Size::Byte)), "dil");
         assert_eq!(operand(Operand::Reg(Reg::Rcx, Size::Word)), "cx");
         assert_eq!(operand(Operand::Imm(-3)), "-3");
-        let mem = |offset| Operand::Mem { base: Reg::Rbp, offset, size: Size::Byte };
+        let mem = |offset| Operand::Mem {
+            base: Reg::Rbp,
+            offset,
+            size: Size::Byte,
+        };
         assert_eq!(operand(mem(0)), "byte ptr [rbp]");
         assert_eq!(operand(mem(-1)), "byte ptr [rbp - 1]");
         assert_eq!(operand(mem(16)), "byte ptr [rbp + 16]");
@@ -254,8 +295,31 @@ mod tests {
     fn sign_extension_from_32_bits() {
         let mut out = String::new();
         let dst = Operand::Reg(Reg::Rax, Size::Qword);
-        print_inst(&mut out, &Inst::Movsx { dst, src: Operand::Mem { base: Reg::Rbp, offset: -4, size: Size::Dword } });
-        print_inst(&mut out, &Inst::Movsx { dst, src: Operand::Mem { base: Reg::Rbp, offset: -1, size: Size::Byte } });
-        assert_eq!(out, "    movsxd rax, dword ptr [rbp - 4]\n    movsx rax, byte ptr [rbp - 1]\n");
+        print_inst(
+            &mut out,
+            &Inst::Movsx {
+                dst,
+                src: Operand::Mem {
+                    base: Reg::Rbp,
+                    offset: -4,
+                    size: Size::Dword,
+                },
+            },
+        );
+        print_inst(
+            &mut out,
+            &Inst::Movsx {
+                dst,
+                src: Operand::Mem {
+                    base: Reg::Rbp,
+                    offset: -1,
+                    size: Size::Byte,
+                },
+            },
+        );
+        assert_eq!(
+            out,
+            "    movsxd rax, dword ptr [rbp - 4]\n    movsx rax, byte ptr [rbp - 1]\n"
+        );
     }
 }

@@ -6,23 +6,47 @@
 use crate::ast::{BinaryOp, BinaryOpKind, UnaryOp};
 use crate::hir::{self, Hir, Type};
 use crate::ir::{
-    self, BinOp, Block, BlockId, CmpOp, Ir, Local, LocalDecl, Operand, Place, Rvalue, Statement, Terminator,
+    self, BinOp, Block, BlockId, CmpOp, Ir, Local, LocalDecl, Operand, Place, Rvalue, Statement,
+    Terminator,
 };
 
 /// Lowers a checked program. Lowering can't fail: the HIR is already known to be valid.
 pub fn lower(hir: &Hir) -> Ir {
-    let functions = hir.fns.iter().map(|function| lower_function(hir, function)).collect();
+    let functions = hir
+        .fns
+        .iter()
+        .map(|function| lower_function(hir, function))
+        .collect();
     Ir { functions }
 }
 
 fn lower_function(hir: &Hir, function: &hir::Function) -> ir::Function {
     // `_0` is the return value, followed by one IR local per HIR local, in the same order.
-    let mut locals = vec![LocalDecl { ty: function.return_type, name: None }];
-    locals.extend(function.locals.iter().map(|local| LocalDecl { ty: local.ty, name: Some(local.name) }));
+    let mut locals = vec![LocalDecl {
+        ty: function.return_type,
+        name: None,
+    }];
+    locals.extend(function.locals.iter().map(|local| LocalDecl {
+        ty: local.ty,
+        name: Some(local.name),
+    }));
 
-    let entry = BlockData { statements: Vec::new(), terminator: None };
-    let mut builder = FunctionBuilder { hir, locals, blocks: vec![entry], current: BlockId(0) };
-    builder.lower_expr_into(function.body, Some(Place { local: Local::RETURN }));
+    let entry = BlockData {
+        statements: Vec::new(),
+        terminator: None,
+    };
+    let mut builder = FunctionBuilder {
+        hir,
+        locals,
+        blocks: vec![entry],
+        current: BlockId(0),
+    };
+    builder.lower_expr_into(
+        function.body,
+        Some(Place {
+            local: Local::RETURN,
+        }),
+    );
     builder.terminate(Terminator::Return);
 
     let blocks = builder
@@ -33,13 +57,20 @@ fn lower_function(hir: &Hir, function: &hir::Function) -> ir::Function {
             terminator: block.terminator.expect("every block is terminated"),
         })
         .collect();
-    ir::Function { name: function.name, locals: builder.locals, blocks }
+    ir::Function {
+        name: function.name,
+        locals: builder.locals,
+        blocks,
+    }
 }
 
 /// Whether an expression can be used as an operand without evaluating anything first: a constant
 /// or a variable.
 fn is_simple(expr: &hir::Expr) -> bool {
-    matches!(expr.kind, hir::ExprKind::Integer { .. } | hir::ExprKind::Bool(_) | hir::ExprKind::Local(_))
+    matches!(
+        expr.kind,
+        hir::ExprKind::Integer { .. } | hir::ExprKind::Bool(_) | hir::ExprKind::Local(_)
+    )
 }
 
 /// A block being built. Its terminator is `None` until the block is finished.
@@ -60,7 +91,10 @@ struct FunctionBuilder<'a> {
 
 impl FunctionBuilder<'_> {
     fn new_block(&mut self) -> BlockId {
-        self.blocks.push(BlockData { statements: Vec::new(), terminator: None });
+        self.blocks.push(BlockData {
+            statements: Vec::new(),
+            terminator: None,
+        });
         BlockId(self.blocks.len() as u32 - 1)
     }
 
@@ -77,7 +111,9 @@ impl FunctionBuilder<'_> {
     }
 
     fn local_place(&self, local: hir::LocalId) -> Place {
-        Place { local: Local(local.0 + 1) }
+        Place {
+            local: Local(local.0 + 1),
+        }
     }
 
     fn new_temp(&mut self, ty: Type) -> Place {
@@ -89,7 +125,9 @@ impl FunctionBuilder<'_> {
     /// Stores `value` in `place`. Storing a `()` does nothing, since it has no data.
     fn assign(&mut self, place: Place, value: Rvalue) {
         if self.locals[place.local.0 as usize].ty != Type::Unit {
-            self.blocks[self.current.0 as usize].statements.push(Statement::Assign { place, value });
+            self.blocks[self.current.0 as usize]
+                .statements
+                .push(Statement::Assign { place, value });
         }
     }
 
@@ -105,13 +143,21 @@ impl FunctionBuilder<'_> {
                 }
             }
             hir::ExprKind::Unit => {}
-            hir::ExprKind::If { cond, then_branch, else_branch } => {
+            hir::ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
                 // Each branch stores its value in the destination, then both continue at `join`.
                 let cond = self.lower_operand(cond);
                 let then_block = self.new_block();
                 let else_block = else_branch.map(|_| self.new_block());
                 let join = self.new_block();
-                self.terminate(Terminator::Branch { cond, then_block, else_block: else_block.unwrap_or(join) });
+                self.terminate(Terminator::Branch {
+                    cond,
+                    then_block,
+                    else_block: else_block.unwrap_or(join),
+                });
 
                 self.switch_to(then_block);
                 self.lower_expr_into(then_branch, destination);
@@ -149,8 +195,14 @@ impl FunctionBuilder<'_> {
             hir::ExprKind::Unary { op, operand } => {
                 let operand = self.lower_operand(operand);
                 let rvalue = match op {
-                    UnaryOp::Neg => Rvalue::Neg { checked: true, operand },
-                    UnaryOp::WrappingNeg => Rvalue::Neg { checked: false, operand },
+                    UnaryOp::Neg => Rvalue::Neg {
+                        checked: true,
+                        operand,
+                    },
+                    UnaryOp::WrappingNeg => Rvalue::Neg {
+                        checked: false,
+                        operand,
+                    },
                     UnaryOp::Not => Rvalue::Not(operand),
                 };
                 self.compute_into(destination, expr.ty, rvalue);
@@ -163,8 +215,16 @@ impl FunctionBuilder<'_> {
                 self.lower_expr_into(lhs, Some(destination));
                 let rhs_block = self.new_block();
                 let join = self.new_block();
-                let (then_block, else_block) = if op == BinaryOp::And { (rhs_block, join) } else { (join, rhs_block) };
-                self.terminate(Terminator::Branch { cond: Operand::Copy(destination), then_block, else_block });
+                let (then_block, else_block) = if op == BinaryOp::And {
+                    (rhs_block, join)
+                } else {
+                    (join, rhs_block)
+                };
+                self.terminate(Terminator::Branch {
+                    cond: Operand::Copy(destination),
+                    then_block,
+                    else_block,
+                });
 
                 self.switch_to(rhs_block);
                 self.lower_expr_into(rhs, Some(destination));
@@ -181,7 +241,12 @@ impl FunctionBuilder<'_> {
                     self.lower_operand_into_temp(lhs)
                 };
                 let rhs = self.lower_operand(rhs);
-                let arithmetic = |op, checked| Rvalue::Binary { op, checked, lhs, rhs };
+                let arithmetic = |op, checked| Rvalue::Binary {
+                    op,
+                    checked,
+                    lhs,
+                    rhs,
+                };
                 let compare = |op| Rvalue::Compare { op, lhs, rhs };
                 let rvalue = match op {
                     BinaryOp::Add => arithmetic(BinOp::Add, true),
@@ -198,7 +263,9 @@ impl FunctionBuilder<'_> {
                     BinaryOp::Le => compare(CmpOp::Le),
                     BinaryOp::Gt => compare(CmpOp::Gt),
                     BinaryOp::Ge => compare(CmpOp::Ge),
-                    BinaryOp::And | BinaryOp::Or => unreachable!("logical operators are lowered above"),
+                    BinaryOp::And | BinaryOp::Or => {
+                        unreachable!("logical operators are lowered above")
+                    }
                 };
                 self.compute_into(destination, expr.ty, rvalue);
             }
@@ -225,7 +292,11 @@ impl FunctionBuilder<'_> {
     /// else is evaluated into a temporary.
     fn lower_operand(&mut self, id: hir::ExprId) -> Operand {
         let expr = *self.hir.expr(id);
-        if is_simple(&expr) { self.simple_operand(&expr) } else { self.lower_operand_into_temp(id) }
+        if is_simple(&expr) {
+            self.simple_operand(&expr)
+        } else {
+            self.lower_operand_into_temp(id)
+        }
     }
 
     /// Lowers an expression into a new temporary, and returns it as an operand.
@@ -238,7 +309,10 @@ impl FunctionBuilder<'_> {
     fn simple_operand(&self, expr: &hir::Expr) -> Operand {
         match expr.kind {
             hir::ExprKind::Integer { value } => Operand::Constant { value, ty: expr.ty },
-            hir::ExprKind::Bool(value) => Operand::Constant { value: value.into(), ty: Type::Bool },
+            hir::ExprKind::Bool(value) => Operand::Constant {
+                value: value.into(),
+                ty: Type::Bool,
+            },
             hir::ExprKind::Local(local) => Operand::Copy(self.local_place(local)),
             _ => unreachable!("not a simple expression"),
         }
@@ -274,11 +348,17 @@ mod tests {
         let mut sources = SourceMap::default();
         let file = sources.add("test.jo".into(), text.into()).unwrap();
         let (tokens, diagnostics) = lexer::lex(file, text);
-        assert!(diagnostics.is_empty(), "unexpected lexer diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected lexer diagnostics: {diagnostics:?}"
+        );
         let ast = parser::parse(&tokens, text).expect("unexpected parse error");
         let mut symbols = Interner::default();
         let (hir, diagnostics) = checker::check(&ast, file, &sources, &mut symbols);
-        assert!(diagnostics.is_empty(), "unexpected check diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected check diagnostics: {diagnostics:?}"
+        );
         lower(&hir.unwrap()).dump(&symbols)
     }
 
@@ -286,7 +366,11 @@ mod tests {
     fn blocks(body: &str) -> String {
         let ir = lower_str(&format!("fn main() -> u8 {{ {body} }}"));
         let lines: Vec<&str> = ir.lines().skip_while(|line| *line != "  bb0:").collect();
-        lines[..lines.len() - 1].iter().map(|line| line.trim()).collect::<Vec<_>>().join("\n")
+        lines[..lines.len() - 1]
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -319,7 +403,10 @@ goto bb2
 bb2:
 _0 = copy _1
 return";
-        assert_eq!(blocks("let mut x: u8 = 0; let c = false; if c { x = 1 } x"), expected);
+        assert_eq!(
+            blocks("let mut x: u8 = 0; let c = false; if c { x = 1 } x"),
+            expected
+        );
     }
 
     #[test]
@@ -343,7 +430,10 @@ _0 = const 0_u8
 goto bb5
 bb5:
 return";
-        assert_eq!(blocks("let x: u8 = 1; if x > 0 and x < 9 { 1 } else { 0 }"), expected);
+        assert_eq!(
+            blocks("let x: u8 = 1; if x > 0 and x < 9 { 1 } else { 0 }"),
+            expected
+        );
     }
 
     #[test]
@@ -367,14 +457,25 @@ _0 = const 0_u8
 goto bb5
 bb5:
 return";
-        assert_eq!(blocks("let a = true; let b = a or !a; if b { 1 } else { 0 }"), expected);
+        assert_eq!(
+            blocks("let a = true; let b = a or !a; if b { 1 } else { 0 }"),
+            expected
+        );
     }
 
     /// Lowers `body` as the body of `main`, and returns just its statements.
     fn statements(body: &str) -> String {
         let ir = lower_str(&format!("fn main() -> u8 {{ {body} }}"));
-        let lines: Vec<&str> = ir.lines().skip_while(|line| *line != "  bb0:").skip(1).collect();
-        lines[..lines.len() - 2].iter().map(|line| line.trim()).collect::<Vec<_>>().join("\n")
+        let lines: Vec<&str> = ir
+            .lines()
+            .skip_while(|line| *line != "  bb0:")
+            .skip(1)
+            .collect();
+        lines[..lines.len() - 2]
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -405,7 +506,10 @@ fn main() -> u8 {
     return
 }
 ";
-        assert_eq!(lower_str("fn main() -> u8 { let x: u8 = 1; let mut y = x; y = 2; y }"), expected);
+        assert_eq!(
+            lower_str("fn main() -> u8 { let x: u8 = 1; let mut y = x; y = 2; y }"),
+            expected
+        );
     }
 
     #[test]
@@ -424,7 +528,10 @@ _0 = copy _1";
 _1 = const 1_u8
 _1 = const 2_u8
 _0 = copy _1";
-        assert_eq!(statements("let mut x: u8 = 1; let unit: () = x = 2; unit; x"), expected);
+        assert_eq!(
+            statements("let mut x: u8 = 1; let unit: () = x = 2; unit; x"),
+            expected
+        );
     }
 
     #[test]
@@ -435,8 +542,14 @@ _1 = const 2_u8
 _2 = checked_mul(copy _1, const 3_u8)
 _0 = checked_add(copy _2, const 1_u8)";
         assert_eq!(statements("let x: u8 = 2; x * 3 + 1"), expected);
-        assert_eq!(statements("let x: u8 = 2; x +% 1"), "_1 = const 2_u8\n_0 = wrapping_add(copy _1, const 1_u8)");
-        assert_eq!(statements("let x: u8 = 2; x / 1"), "_1 = const 2_u8\n_0 = checked_div(copy _1, const 1_u8)");
+        assert_eq!(
+            statements("let x: u8 = 2; x +% 1"),
+            "_1 = const 2_u8\n_0 = wrapping_add(copy _1, const 1_u8)"
+        );
+        assert_eq!(
+            statements("let x: u8 = 2; x / 1"),
+            "_1 = const 2_u8\n_0 = checked_div(copy _1, const 1_u8)"
+        );
     }
 
     #[test]
@@ -466,6 +579,9 @@ _0 = checked_cast(copy _2) to u8";
             statements("let x: u8 = 1; let y: u32 = x as u32; y as u8"),
             "_1 = const 1_u8\n_2 = wrapping_cast(copy _1) to u32\n_0 = checked_cast(copy _2) to u8"
         );
-        assert_eq!(statements("let x: u32 = 1; x as% u8"), "_1 = const 1_u32\n_0 = wrapping_cast(copy _1) to u8");
+        assert_eq!(
+            statements("let x: u32 = 1; x as% u8"),
+            "_1 = const 1_u32\n_0 = wrapping_cast(copy _1) to u8"
+        );
     }
 }

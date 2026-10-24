@@ -41,7 +41,10 @@ pub enum Type {
 }
 
 impl Type {
-    pub const U8: Type = Type::Int(IntType { signed: false, bits: 8 });
+    pub const U8: Type = Type::Int(IntType {
+        signed: false,
+        bits: 8,
+    });
 }
 
 /// An integer type. Signed integers are two's complement. Only 8, 16, 32, and 64 bits are allowed
@@ -54,11 +57,19 @@ pub struct IntType {
 
 impl IntType {
     pub fn min(self) -> i128 {
-        if self.signed { -(1 << (self.bits - 1)) } else { 0 }
+        if self.signed {
+            -(1 << (self.bits - 1))
+        } else {
+            0
+        }
     }
 
     pub fn max(self) -> i128 {
-        if self.signed { (1 << (self.bits - 1)) - 1 } else { (1 << self.bits) - 1 }
+        if self.signed {
+            (1 << (self.bits - 1)) - 1
+        } else {
+            (1 << self.bits) - 1
+        }
     }
 
     /// Whether every value of `other` is also a value of this type.
@@ -121,26 +132,48 @@ pub struct Expr {
 #[derive(Clone, Copy, Debug)]
 pub enum ExprKind {
     /// An integer constant. The value is guaranteed to fit in the expression's type.
-    Integer { value: i128 },
+    Integer {
+        value: i128,
+    },
     /// The unit value, `()`.
     Unit,
     Bool(bool),
     /// Evaluates `cond`, then one branch. Without an `else`, the expression has type `()`.
-    If { cond: ExprId, then_branch: ExprId, else_branch: Option<ExprId> },
+    If {
+        cond: ExprId,
+        then_branch: ExprId,
+        else_branch: Option<ExprId>,
+    },
     /// Reads a local variable. As the target of an assignment, refers to the variable instead.
     Local(LocalId),
     /// Statements, then optionally a final expression that gives the block its value.
-    Block { stmts: StmtRange, tail: Option<ExprId> },
+    Block {
+        stmts: StmtRange,
+        tail: Option<ExprId>,
+    },
     /// Stores `value` in `target`, which is always a `Local` expression for now.
-    Assign { target: ExprId, value: ExprId },
+    Assign {
+        target: ExprId,
+        value: ExprId,
+    },
     /// Negation of a signed integer, or logical not of a `bool`. The operand has the expression's
     /// type.
-    Unary { op: UnaryOp, operand: ExprId },
+    Unary {
+        op: UnaryOp,
+        operand: ExprId,
+    },
     /// A binary operator. Both operands have the same type: the expression's type for arithmetic
     /// and logical operators, and an integer or `bool` for comparisons, whose result is `bool`.
-    Binary { op: BinaryOp, lhs: ExprId, rhs: ExprId },
+    Binary {
+        op: BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+    },
     /// Converts an integer to the expression's type: `as%` if `wrapping`, otherwise `as`.
-    Cast { operand: ExprId, wrapping: bool },
+    Cast {
+        operand: ExprId,
+        wrapping: bool,
+    },
 }
 
 impl Hir {
@@ -160,7 +193,10 @@ impl Hir {
 
     /// Stores a block's statements together, so the block can refer to them as one range.
     pub fn add_stmts(&mut self, stmts: Vec<Stmt>) -> StmtRange {
-        let range = StmtRange { start: self.stmts.len() as u32, len: stmts.len() as u32 };
+        let range = StmtRange {
+            start: self.stmts.len() as u32,
+            len: stmts.len() as u32,
+        };
         self.stmts.extend(stmts);
         range
     }
@@ -175,9 +211,21 @@ impl Hir {
             for local in &function.locals {
                 let mutable = if local.mutable { "mut " } else { "" };
                 let location = sources.span_location(local.span);
-                writeln!(out, "  local {mutable}`{}`: {} ({location})", symbols.get(local.name), local.ty).unwrap();
+                writeln!(
+                    out,
+                    "  local {mutable}`{}`: {} ({location})",
+                    symbols.get(local.name),
+                    local.ty
+                )
+                .unwrap();
             }
-            let mut dumper = Dumper { hir: self, function, sources, symbols, out: &mut out };
+            let mut dumper = Dumper {
+                hir: self,
+                function,
+                sources,
+                symbols,
+                out: &mut out,
+            };
             dumper.expr(1, function.body);
         }
         out
@@ -200,7 +248,8 @@ impl Dumper<'_> {
     }
 
     fn local_name(&self, local: LocalId) -> &str {
-        self.symbols.get(self.function.locals[local.0 as usize].name)
+        self.symbols
+            .get(self.function.locals[local.0 as usize].name)
     }
 
     fn expr(&mut self, depth: usize, id: ExprId) {
@@ -215,19 +264,27 @@ impl Dumper<'_> {
             ExprKind::Assign { .. } => "assign".to_string(),
             ExprKind::Unary { op, .. } => format!("unary `{}`", op.symbol()),
             ExprKind::Binary { op, .. } => format!("binary `{}`", op.symbol()),
-            ExprKind::Cast { wrapping, .. } => if wrapping { "cast `as%`" } else { "cast `as`" }.to_string(),
+            ExprKind::Cast { wrapping, .. } => {
+                if wrapping { "cast `as%`" } else { "cast `as`" }.to_string()
+            }
         };
         self.line(depth, &format!("{label}: {}", expr.ty), expr.span);
         match expr.kind {
             ExprKind::Integer { .. } | ExprKind::Unit | ExprKind::Bool(_) | ExprKind::Local(_) => {}
-            ExprKind::If { cond, then_branch, else_branch } => {
+            ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
                 self.expr(depth + 1, cond);
                 self.expr(depth + 1, then_branch);
                 if let Some(else_branch) = else_branch {
                     self.expr(depth + 1, else_branch);
                 }
             }
-            ExprKind::Unary { operand, .. } | ExprKind::Cast { operand, .. } => self.expr(depth + 1, operand),
+            ExprKind::Unary { operand, .. } | ExprKind::Cast { operand, .. } => {
+                self.expr(depth + 1, operand)
+            }
             ExprKind::Binary { lhs, rhs, .. } => {
                 self.expr(depth + 1, lhs);
                 self.expr(depth + 1, rhs);

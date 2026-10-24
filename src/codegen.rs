@@ -7,12 +7,18 @@
 use crate::asm::{self, Cond, Inst, Operand, Reg, Size};
 use crate::hir::{IntType, Type};
 use crate::intern::Interner;
-use crate::ir::{self, BinOp, BlockId, CmpOp, Ir, Local, LocalDecl, Place, Rvalue, Statement, Terminator};
+use crate::ir::{
+    self, BinOp, BlockId, CmpOp, Ir, Local, LocalDecl, Place, Rvalue, Statement, Terminator,
+};
 
 /// Generates the whole program: an entry point, plus every function in the IR.
 pub fn generate(ir: &Ir, symbols: &Interner) -> Vec<asm::Function> {
     let mut functions = vec![linux_entry_point()];
-    functions.extend(ir.functions.iter().map(|function| generate_function(function, symbols)));
+    functions.extend(
+        ir.functions
+            .iter()
+            .map(|function| generate_function(function, symbols)),
+    );
     functions
 }
 
@@ -24,11 +30,21 @@ fn linux_entry_point() -> asm::Function {
     let insts = vec![
         Inst::Call("main".into()),
         // `main` returns a `u8` in `al`; the rest of `rax` is unspecified.
-        Inst::Movzx { dst: Operand::Reg(Reg::Rdi, Size::Dword), src: Operand::Reg(Reg::Rax, Size::Byte) },
-        Inst::Mov { dst: Operand::Reg(Reg::Rax, Size::Dword), src: Operand::Imm(SYS_EXIT_GROUP) },
+        Inst::Movzx {
+            dst: Operand::Reg(Reg::Rdi, Size::Dword),
+            src: Operand::Reg(Reg::Rax, Size::Byte),
+        },
+        Inst::Mov {
+            dst: Operand::Reg(Reg::Rax, Size::Dword),
+            src: Operand::Imm(SYS_EXIT_GROUP),
+        },
         Inst::Syscall,
     ];
-    asm::Function { name: "_start".into(), global: true, insts }
+    asm::Function {
+        name: "_start".into(),
+        global: true,
+        insts,
+    }
 }
 
 /// The size of a value of type `ty` in memory. `()` has no size, since it has no data, so no
@@ -55,7 +71,11 @@ fn int_size(int: IntType) -> Size {
 /// bits, where every operation on them gives the exact result, so overflow is checked by comparing
 /// that result against the type's range. 32- and 64-bit values use the CPU's overflow flags.
 fn work_size(int: IntType) -> Size {
-    if int.bits <= 32 { Size::Dword } else { Size::Qword }
+    if int.bits <= 32 {
+        Size::Dword
+    } else {
+        Size::Qword
+    }
 }
 
 fn is_narrow(int: IntType) -> bool {
@@ -66,7 +86,10 @@ fn is_narrow(int: IntType) -> bool {
 fn int_type(ty: Type) -> IntType {
     match ty {
         Type::Int(int) => int,
-        Type::Bool => IntType { signed: false, bits: 8 },
+        Type::Bool => IntType {
+            signed: false,
+            bits: 8,
+        },
         Type::Unit => unreachable!("no instruction reads or writes `()`"),
     }
 }
@@ -99,7 +122,10 @@ fn layout_frame(locals: &[LocalDecl]) -> Frame {
         used = (used + bytes).next_multiple_of(bytes);
         offsets.push(Some(-(used as i32)));
     }
-    Frame { offsets, size: used.next_multiple_of(16) }
+    Frame {
+        offsets,
+        size: used.next_multiple_of(16),
+    }
 }
 
 fn generate_function(function: &ir::Function, symbols: &Interner) -> asm::Function {
@@ -113,7 +139,11 @@ fn generate_function(function: &ir::Function, symbols: &Interner) -> asm::Functi
         labels: 0,
     };
     generator.generate();
-    asm::Function { name: name.to_string(), global: false, insts: generator.insts }
+    asm::Function {
+        name: name.to_string(),
+        global: false,
+        insts: generator.insts,
+    }
 }
 
 struct FunctionGenerator<'a> {
@@ -131,9 +161,15 @@ impl FunctionGenerator<'_> {
     fn generate(&mut self) {
         // Prologue: save the caller's frame pointer, and reserve space for this frame.
         self.push(Inst::Push(Reg::Rbp));
-        self.push(Inst::Mov { dst: reg(Reg::Rbp, Size::Qword), src: reg(Reg::Rsp, Size::Qword) });
+        self.push(Inst::Mov {
+            dst: reg(Reg::Rbp, Size::Qword),
+            src: reg(Reg::Rsp, Size::Qword),
+        });
         if self.frame.size > 0 {
-            self.push(Inst::Sub { dst: reg(Reg::Rsp, Size::Qword), src: Operand::Imm(self.frame.size.into()) });
+            self.push(Inst::Sub {
+                dst: reg(Reg::Rsp, Size::Qword),
+                src: Operand::Imm(self.frame.size.into()),
+            });
         }
 
         for (i, block) in self.function.blocks.iter().enumerate() {
@@ -153,7 +189,11 @@ impl FunctionGenerator<'_> {
                         self.push(Inst::Jmp(self.block_label(target)));
                     }
                 }
-                Terminator::Branch { cond, then_block, else_block } => {
+                Terminator::Branch {
+                    cond,
+                    then_block,
+                    else_block,
+                } => {
                     let al = reg(Reg::Rax, Size::Byte);
                     self.load(Reg::Rax, cond, Size::Byte);
                     self.push(Inst::Test { lhs: al, rhs: al });
@@ -211,9 +251,14 @@ impl FunctionGenerator<'_> {
 
     /// The memory operand for a place's slot. Lowering never reads or writes a place of type `()`.
     fn slot(&self, place: Place) -> Operand {
-        let offset = self.frame.offsets[place.local.0 as usize].expect("access to a zero-sized local");
+        let offset =
+            self.frame.offsets[place.local.0 as usize].expect("access to a zero-sized local");
         let size = value_size(self.place_type(place)).expect("access to a zero-sized local");
-        Operand::Mem { base: Reg::Rbp, offset, size }
+        Operand::Mem {
+            base: Reg::Rbp,
+            offset,
+            size,
+        }
     }
 
     /// Loads an operand into `reg` at `width`, extending it according to its signedness, so the
@@ -221,7 +266,12 @@ impl FunctionGenerator<'_> {
     fn load(&mut self, into: Reg, operand: ir::Operand, width: Size) {
         let dst = reg(into, width);
         let place = match operand {
-            ir::Operand::Constant { value, .. } => return self.push(Inst::Mov { dst, src: imm(value) }),
+            ir::Operand::Constant { value, .. } => {
+                return self.push(Inst::Mov {
+                    dst,
+                    src: imm(value),
+                });
+            }
             ir::Operand::Copy(place) => place,
         };
         let int = int_type(self.place_type(place));
@@ -232,7 +282,10 @@ impl FunctionGenerator<'_> {
             Inst::Movsx { dst, src }
         } else if int_size(int) == Size::Dword {
             // Writing a 32-bit register clears the upper half, which zero-extends the value.
-            Inst::Mov { dst: reg(into, Size::Dword), src }
+            Inst::Mov {
+                dst: reg(into, Size::Dword),
+                src,
+            }
         } else {
             Inst::Movzx { dst, src }
         };
@@ -243,7 +296,10 @@ impl FunctionGenerator<'_> {
     fn store(&mut self, place: Place, from: Reg) {
         let dst = self.slot(place);
         let size = value_size(self.place_type(place)).unwrap();
-        self.push(Inst::Mov { dst, src: reg(from, size) });
+        self.push(Inst::Mov {
+            dst,
+            src: reg(from, size),
+        });
     }
 
     fn assign(&mut self, place: Place, value: Rvalue) {
@@ -251,7 +307,12 @@ impl FunctionGenerator<'_> {
         match value {
             // x86 can't move directly from memory to memory, so go through `rax`.
             Rvalue::Use(operand) => self.load(Reg::Rax, operand, int_size(ty)),
-            Rvalue::Binary { op, checked, lhs, rhs } => self.binary(ty, op, checked, lhs, rhs),
+            Rvalue::Binary {
+                op,
+                checked,
+                lhs,
+                rhs,
+            } => self.binary(ty, op, checked, lhs, rhs),
             Rvalue::Neg { checked, operand } => {
                 let width = work_size(ty);
                 self.load(Reg::Rax, operand, width);
@@ -266,7 +327,10 @@ impl FunctionGenerator<'_> {
                 // A `bool` is 0 or 1, so flipping the lowest bit negates it.
                 let al = reg(Reg::Rax, Size::Byte);
                 self.load(Reg::Rax, operand, Size::Byte);
-                self.push(Inst::Xor { dst: al, src: Operand::Imm(1) });
+                self.push(Inst::Xor {
+                    dst: al,
+                    src: Operand::Imm(1),
+                });
             }
         }
         self.store(place, Reg::Rax);
@@ -278,7 +342,10 @@ impl FunctionGenerator<'_> {
         let width = work_size(ty);
         self.load(Reg::Rax, lhs, width);
         self.load(Reg::Rcx, rhs, width);
-        self.push(Inst::Cmp { lhs: reg(Reg::Rax, width), rhs: reg(Reg::Rcx, width) });
+        self.push(Inst::Cmp {
+            lhs: reg(Reg::Rax, width),
+            rhs: reg(Reg::Rcx, width),
+        });
         let cond = match (op, ty.signed) {
             (CmpOp::Eq, _) => Cond::Equal,
             (CmpOp::Ne, _) => Cond::NotEqual,
@@ -295,13 +362,24 @@ impl FunctionGenerator<'_> {
     }
 
     /// Computes a binary operation on values of type `ty`, leaving the result in `rax`.
-    fn binary(&mut self, ty: IntType, op: BinOp, checked: bool, lhs: ir::Operand, rhs: ir::Operand) {
+    fn binary(
+        &mut self,
+        ty: IntType,
+        op: BinOp,
+        checked: bool,
+        lhs: ir::Operand,
+        rhs: ir::Operand,
+    ) {
         let width = work_size(ty);
         let (rax, rcx) = (reg(Reg::Rax, width), reg(Reg::Rcx, width));
         self.load(Reg::Rax, lhs, width);
         self.load(Reg::Rcx, rhs, width);
         // The flag that signals overflow at the work width, for types that use flags.
-        let overflow_flag = if ty.signed { Cond::Overflow } else { Cond::Carry };
+        let overflow_flag = if ty.signed {
+            Cond::Overflow
+        } else {
+            Cond::Carry
+        };
         match op {
             BinOp::Add => {
                 self.push(Inst::Add { dst: rax, src: rcx });
@@ -335,7 +413,11 @@ impl FunctionGenerator<'_> {
     /// remainder in `rax`.
     fn divide(&mut self, ty: IntType, op: BinOp) {
         let width = work_size(ty);
-        let (rax, rcx, rdx) = (reg(Reg::Rax, width), reg(Reg::Rcx, width), reg(Reg::Rdx, width));
+        let (rax, rcx, rdx) = (
+            reg(Reg::Rax, width),
+            reg(Reg::Rcx, width),
+            reg(Reg::Rdx, width),
+        );
 
         // Division by zero traps.
         self.push(Inst::Test { lhs: rcx, rhs: rcx });
@@ -345,14 +427,24 @@ impl FunctionGenerator<'_> {
             // `MIN / -1` overflows, since the result would be `MAX + 1`. `MIN % -1` traps too, so
             // the two always behave the same.
             let not_minus_one = self.new_label();
-            self.push(Inst::Cmp { lhs: rcx, rhs: Operand::Imm(-1) });
+            self.push(Inst::Cmp {
+                lhs: rcx,
+                rhs: Operand::Imm(-1),
+            });
             self.push(Inst::Jcc(Cond::NotEqual, not_minus_one.clone()));
-            self.push(Inst::Mov { dst: rdx, src: imm(ty.min()) });
+            self.push(Inst::Mov {
+                dst: rdx,
+                src: imm(ty.min()),
+            });
             self.push(Inst::Cmp { lhs: rax, rhs: rdx });
             self.trap_if(Cond::Equal);
             self.push(Inst::Label(not_minus_one));
             // `idiv` divides `rdx:rax`, so sign-extend `rax` into `rdx`.
-            self.push(if width == Size::Dword { Inst::Cdq } else { Inst::Cqo });
+            self.push(if width == Size::Dword {
+                Inst::Cdq
+            } else {
+                Inst::Cqo
+            });
             self.push(Inst::Idiv(rcx));
         } else {
             // `div` divides `rdx:rax`, so clear `rdx`. Clearing `edx` also clears the upper half.
@@ -374,10 +466,16 @@ impl FunctionGenerator<'_> {
             return self.trap_if(flag);
         }
         let eax = reg(Reg::Rax, Size::Dword);
-        self.push(Inst::Cmp { lhs: eax, rhs: imm(ty.max()) });
+        self.push(Inst::Cmp {
+            lhs: eax,
+            rhs: imm(ty.max()),
+        });
         if ty.signed {
             self.trap_if(Cond::Greater);
-            self.push(Inst::Cmp { lhs: eax, rhs: imm(ty.min()) });
+            self.push(Inst::Cmp {
+                lhs: eax,
+                rhs: imm(ty.min()),
+            });
             self.trap_if(Cond::Less);
         } else {
             // A negative result looks like a huge unsigned number, so this catches it too.
@@ -403,32 +501,51 @@ impl FunctionGenerator<'_> {
                     self.push(Inst::Test { lhs: rax, rhs: rax });
                     self.trap_if(Cond::Sign);
                 } else {
-                    self.push(Inst::Mov { dst: rcx, src: imm(to.min()) });
+                    self.push(Inst::Mov {
+                        dst: rcx,
+                        src: imm(to.min()),
+                    });
                     self.push(Inst::Cmp { lhs: rax, rhs: rcx });
                     self.trap_if(Cond::Less);
                 }
             }
             if to.max() < from.max() {
-                self.push(Inst::Mov { dst: rcx, src: imm(to.max()) });
+                self.push(Inst::Mov {
+                    dst: rcx,
+                    src: imm(to.max()),
+                });
                 self.push(Inst::Cmp { lhs: rax, rhs: rcx });
                 self.trap_if(Cond::Greater);
             }
         } else if to.max() < from.max() {
             // The value is unsigned, so compare unsigned.
-            self.push(Inst::Mov { dst: rcx, src: imm(to.max()) });
+            self.push(Inst::Mov {
+                dst: rcx,
+                src: imm(to.max()),
+            });
             self.push(Inst::Cmp { lhs: rax, rhs: rcx });
             self.trap_if(Cond::Above);
         }
     }
 
     fn ret(&mut self) {
-        let return_type = self.place_type(Place { local: Local::RETURN });
+        let return_type = self.place_type(Place {
+            local: Local::RETURN,
+        });
         if let Some(size) = value_size(return_type) {
-            let src = self.slot(Place { local: Local::RETURN });
-            self.push(Inst::Mov { dst: reg(Reg::Rax, size), src });
+            let src = self.slot(Place {
+                local: Local::RETURN,
+            });
+            self.push(Inst::Mov {
+                dst: reg(Reg::Rax, size),
+                src,
+            });
         }
         // Epilogue: free the frame, and restore the caller's frame pointer.
-        self.push(Inst::Mov { dst: reg(Reg::Rsp, Size::Qword), src: reg(Reg::Rbp, Size::Qword) });
+        self.push(Inst::Mov {
+            dst: reg(Reg::Rsp, Size::Qword),
+            src: reg(Reg::Rbp, Size::Qword),
+        });
         self.push(Inst::Pop(Reg::Rbp));
         self.push(Inst::Ret);
     }
@@ -448,11 +565,17 @@ mod tests {
         let mut sources = SourceMap::default();
         let file = sources.add("test.jo".into(), text.into()).unwrap();
         let (tokens, diagnostics) = lexer::lex(file, text);
-        assert!(diagnostics.is_empty(), "unexpected lexer diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected lexer diagnostics: {diagnostics:?}"
+        );
         let ast = parser::parse(&tokens, text).expect("unexpected parse error");
         let mut symbols = Interner::default();
         let (hir, diagnostics) = checker::check(&ast, file, &sources, &mut symbols);
-        assert!(diagnostics.is_empty(), "unexpected check diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected check diagnostics: {diagnostics:?}"
+        );
         asm::print(&generate(&lower::lower(&hir.unwrap()), &symbols))
     }
 
@@ -525,9 +648,15 @@ main:
     #[test]
     fn wide_checked_add_uses_flags() {
         let unsigned = main_body("fn main() -> u8 { let x: u64 = 7; (x + 1) as% u8 }");
-        assert!(unsigned.contains("add rax, rcx\n    jc .Lmain.trap\n"), "{unsigned}");
+        assert!(
+            unsigned.contains("add rax, rcx\n    jc .Lmain.trap\n"),
+            "{unsigned}"
+        );
         let signed = main_body("fn main() -> u8 { let x: i32 = 7; (x + 1) as% u8 }");
-        assert!(signed.contains("add eax, ecx\n    jo .Lmain.trap\n"), "{signed}");
+        assert!(
+            signed.contains("add eax, ecx\n    jo .Lmain.trap\n"),
+            "{signed}"
+        );
     }
 
     #[test]
@@ -539,8 +668,16 @@ main:
     #[test]
     fn frame_layout() {
         let local = |ty| LocalDecl { ty, name: None };
-        let i32 = Type::Int(IntType { signed: true, bits: 32 });
-        let frame = layout_frame(&[local(Type::U8), local(Type::Unit), local(i32), local(Type::U8)]);
+        let i32 = Type::Int(IntType {
+            signed: true,
+            bits: 32,
+        });
+        let frame = layout_frame(&[
+            local(Type::U8),
+            local(Type::Unit),
+            local(i32),
+            local(Type::U8),
+        ]);
         assert_eq!(frame.offsets, [Some(-1), None, Some(-8), Some(-9)]);
         assert_eq!(frame.size, 16);
         assert_eq!(layout_frame(&vec![local(Type::U8); 17]).size, 32);

@@ -62,7 +62,13 @@ impl TypeExpr {
 #[derive(Clone, Copy, Debug)]
 pub enum Stmt {
     /// `let mut? name (: ty)? = init;`
-    Let { mutable: bool, name: Ident, ty: Option<TypeExpr>, init: ExprId, span: Span },
+    Let {
+        mutable: bool,
+        name: Ident,
+        ty: Option<TypeExpr>,
+        init: ExprId,
+        span: Span,
+    },
     /// An expression used as a statement. `semicolon` is false for a block-like expression written
     /// without one.
     Expr { expr: ExprId, semicolon: bool },
@@ -87,15 +93,36 @@ pub enum ExprKind {
     Bool(bool),
     /// `if cond { ... } else ...`. `then_branch` is a block; `else_branch` is a block or another
     /// `if`.
-    If { cond: ExprId, then_branch: ExprId, else_branch: Option<ExprId> },
+    If {
+        cond: ExprId,
+        then_branch: ExprId,
+        else_branch: Option<ExprId>,
+    },
     /// A block: statements, then optionally a final expression that gives the block its value.
-    Block { stmts: StmtRange, tail: Option<ExprId> },
+    Block {
+        stmts: StmtRange,
+        tail: Option<ExprId>,
+    },
     /// `target = value`.
-    Assign { target: ExprId, value: ExprId },
-    Unary { op: UnaryOp, operand: ExprId },
-    Binary { op: BinaryOp, lhs: ExprId, rhs: ExprId },
+    Assign {
+        target: ExprId,
+        value: ExprId,
+    },
+    Unary {
+        op: UnaryOp,
+        operand: ExprId,
+    },
+    Binary {
+        op: BinaryOp,
+        lhs: ExprId,
+        rhs: ExprId,
+    },
     /// `operand as ty`, or `operand as% ty` if `wrapping`.
-    Cast { operand: ExprId, ty: TypeExpr, wrapping: bool },
+    Cast {
+        operand: ExprId,
+        ty: TypeExpr,
+        wrapping: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,7 +234,10 @@ impl Ast {
 
     /// Stores a block's statements together, so the block can refer to them as one range.
     pub fn add_stmts(&mut self, stmts: Vec<Stmt>) -> StmtRange {
-        let range = StmtRange { start: self.stmts.len() as u32, len: stmts.len() as u32 };
+        let range = StmtRange {
+            start: self.stmts.len() as u32,
+            len: stmts.len() as u32,
+        };
         self.stmts.extend(stmts);
         range
     }
@@ -224,7 +254,14 @@ impl Ast {
         out
     }
 
-    fn dump_type(&self, out: &mut String, depth: usize, label: &str, ty: TypeExpr, sources: &SourceMap) {
+    fn dump_type(
+        &self,
+        out: &mut String,
+        depth: usize,
+        label: &str,
+        ty: TypeExpr,
+        sources: &SourceMap,
+    ) {
         let label = format!("{label} `{}`", sources.text(ty.span()));
         dump_line(out, depth, &label, ty.span(), sources);
     }
@@ -250,8 +287,14 @@ impl Ast {
                 }
             }
             ExprKind::Unit => dump_line(out, depth, "unit", expr.span, sources),
-            ExprKind::Bool(value) => dump_line(out, depth, &format!("bool `{value}`"), expr.span, sources),
-            ExprKind::If { cond, then_branch, else_branch } => {
+            ExprKind::Bool(value) => {
+                dump_line(out, depth, &format!("bool `{value}`"), expr.span, sources)
+            }
+            ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
                 dump_line(out, depth, "if", expr.span, sources);
                 self.dump_expr(out, depth + 1, cond, sources);
                 self.dump_expr(out, depth + 1, then_branch, sources);
@@ -265,15 +308,31 @@ impl Ast {
                 self.dump_expr(out, depth + 1, value, sources);
             }
             ExprKind::Unary { op, operand } => {
-                dump_line(out, depth, &format!("unary `{}`", op.symbol()), expr.span, sources);
+                dump_line(
+                    out,
+                    depth,
+                    &format!("unary `{}`", op.symbol()),
+                    expr.span,
+                    sources,
+                );
                 self.dump_expr(out, depth + 1, operand, sources);
             }
             ExprKind::Binary { op, lhs, rhs } => {
-                dump_line(out, depth, &format!("binary `{}`", op.symbol()), expr.span, sources);
+                dump_line(
+                    out,
+                    depth,
+                    &format!("binary `{}`", op.symbol()),
+                    expr.span,
+                    sources,
+                );
                 self.dump_expr(out, depth + 1, lhs, sources);
                 self.dump_expr(out, depth + 1, rhs, sources);
             }
-            ExprKind::Cast { operand, ty, wrapping } => {
+            ExprKind::Cast {
+                operand,
+                ty,
+                wrapping,
+            } => {
                 let label = if wrapping { "cast `as%`" } else { "cast `as`" };
                 dump_line(out, depth, label, expr.span, sources);
                 self.dump_expr(out, depth + 1, operand, sources);
@@ -284,7 +343,13 @@ impl Ast {
 
     fn dump_stmt(&self, out: &mut String, depth: usize, stmt: Stmt, sources: &SourceMap) {
         match stmt {
-            Stmt::Let { mutable, name, ty, init, span } => {
+            Stmt::Let {
+                mutable,
+                name,
+                ty,
+                init,
+                span,
+            } => {
                 let mutable = if mutable { "mut " } else { "" };
                 let label = format!("let {mutable}`{}`", sources.text(name.span));
                 dump_line(out, depth, &label, span, sources);
@@ -294,7 +359,11 @@ impl Ast {
                 self.dump_expr(out, depth + 1, init, sources);
             }
             Stmt::Expr { expr, semicolon } => {
-                let label = if semicolon { "statement" } else { "statement (no `;`)" };
+                let label = if semicolon {
+                    "statement"
+                } else {
+                    "statement (no `;`)"
+                };
                 dump_line(out, depth, label, self.expr(expr).span, sources);
                 self.dump_expr(out, depth + 1, expr, sources);
             }

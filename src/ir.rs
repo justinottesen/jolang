@@ -77,14 +77,29 @@ pub enum Rvalue {
     Use(Operand),
     /// Arithmetic on two operands of the result's type. If `checked`, traps on overflow; otherwise
     /// wraps. Division and remainder are always checked, and also trap on division by zero.
-    Binary { op: BinOp, checked: bool, lhs: Operand, rhs: Operand },
+    Binary {
+        op: BinOp,
+        checked: bool,
+        lhs: Operand,
+        rhs: Operand,
+    },
     /// Negation of a signed operand. Traps on overflow if `checked`; otherwise wraps.
-    Neg { checked: bool, operand: Operand },
+    Neg {
+        checked: bool,
+        operand: Operand,
+    },
     /// Converts an integer operand to the result's type. If `checked`, traps when the value
     /// doesn't fit; otherwise keeps the low bits.
-    Cast { checked: bool, operand: Operand },
+    Cast {
+        checked: bool,
+        operand: Operand,
+    },
     /// Compares two operands of the same type, giving a `bool`.
-    Compare { op: CmpOp, lhs: Operand, rhs: Operand },
+    Compare {
+        op: CmpOp,
+        lhs: Operand,
+        rhs: Operand,
+    },
     /// Logical not of a `bool`.
     Not(Operand),
 }
@@ -115,7 +130,11 @@ pub enum Terminator {
     /// Continues at another block.
     Goto(BlockId),
     /// Continues at `then_block` if the `bool` condition is true, and at `else_block` otherwise.
-    Branch { cond: Operand, then_block: BlockId, else_block: BlockId },
+    Branch {
+        cond: Operand,
+        then_block: BlockId,
+        else_block: BlockId,
+    },
 }
 
 impl Ir {
@@ -124,10 +143,18 @@ impl Ir {
         let mut out = String::new();
         for function in &self.functions {
             let return_type = function.locals[Local::RETURN.0 as usize].ty;
-            writeln!(out, "fn {}() -> {return_type} {{", symbols.get(function.name)).unwrap();
+            writeln!(
+                out,
+                "fn {}() -> {return_type} {{",
+                symbols.get(function.name)
+            )
+            .unwrap();
             for (i, local) in function.locals.iter().enumerate() {
                 match local.name {
-                    Some(name) => writeln!(out, "    let _{i}: {}  // {}", local.ty, symbols.get(name)).unwrap(),
+                    Some(name) => {
+                        writeln!(out, "    let _{i}: {}  // {}", local.ty, symbols.get(name))
+                            .unwrap()
+                    }
                     None => writeln!(out, "    let _{i}: {}", local.ty).unwrap(),
                 }
             }
@@ -137,17 +164,31 @@ impl Ir {
                     match statement {
                         Statement::Assign { place, value } => {
                             let ty = function.locals[place.local.0 as usize].ty;
-                            writeln!(out, "    {} = {}", dump_place(*place), dump_rvalue(*value, ty)).unwrap();
+                            writeln!(
+                                out,
+                                "    {} = {}",
+                                dump_place(*place),
+                                dump_rvalue(*value, ty)
+                            )
+                            .unwrap();
                         }
                     }
                 }
                 match block.terminator {
                     Terminator::Return => writeln!(out, "    return").unwrap(),
                     Terminator::Goto(target) => writeln!(out, "    goto bb{}", target.0).unwrap(),
-                    Terminator::Branch { cond, then_block, else_block } => {
+                    Terminator::Branch {
+                        cond,
+                        then_block,
+                        else_block,
+                    } => {
                         let cond = dump_operand(cond);
-                        writeln!(out, "    branch({cond}) -> [true: bb{}, false: bb{}]", then_block.0, else_block.0)
-                            .unwrap();
+                        writeln!(
+                            out,
+                            "    branch({cond}) -> [true: bb{}, false: bb{}]",
+                            then_block.0, else_block.0
+                        )
+                        .unwrap();
                     }
                 }
             }
@@ -163,7 +204,10 @@ fn dump_place(place: Place) -> String {
 
 fn dump_operand(operand: Operand) -> String {
     match operand {
-        Operand::Constant { value, ty: Type::Bool } => format!("const {}", value != 0),
+        Operand::Constant {
+            value,
+            ty: Type::Bool,
+        } => format!("const {}", value != 0),
         Operand::Constant { value, ty } => format!("const {value}_{ty}"),
         Operand::Copy(place) => format!("copy {}", dump_place(place)),
     }
@@ -174,7 +218,12 @@ fn dump_rvalue(rvalue: Rvalue, ty: Type) -> String {
     let checked = |checked| if checked { "checked" } else { "wrapping" };
     match rvalue {
         Rvalue::Use(operand) => dump_operand(operand),
-        Rvalue::Binary { op, checked: is_checked, lhs, rhs } => {
+        Rvalue::Binary {
+            op,
+            checked: is_checked,
+            lhs,
+            rhs,
+        } => {
             let op = match op {
                 BinOp::Add => "add",
                 BinOp::Sub => "sub",
@@ -182,11 +231,26 @@ fn dump_rvalue(rvalue: Rvalue, ty: Type) -> String {
                 BinOp::Div => "div",
                 BinOp::Rem => "rem",
             };
-            format!("{}_{op}({}, {})", checked(is_checked), dump_operand(lhs), dump_operand(rhs))
+            format!(
+                "{}_{op}({}, {})",
+                checked(is_checked),
+                dump_operand(lhs),
+                dump_operand(rhs)
+            )
         }
-        Rvalue::Neg { checked: is_checked, operand } => format!("{}_neg({})", checked(is_checked), dump_operand(operand)),
-        Rvalue::Cast { checked: is_checked, operand } => {
-            format!("{}_cast({}) to {ty}", checked(is_checked), dump_operand(operand))
+        Rvalue::Neg {
+            checked: is_checked,
+            operand,
+        } => format!("{}_neg({})", checked(is_checked), dump_operand(operand)),
+        Rvalue::Cast {
+            checked: is_checked,
+            operand,
+        } => {
+            format!(
+                "{}_cast({}) to {ty}",
+                checked(is_checked),
+                dump_operand(operand)
+            )
         }
         Rvalue::Compare { op, lhs, rhs } => {
             let op = match op {

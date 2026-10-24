@@ -15,7 +15,11 @@ pub struct Span {
 impl Span {
     /// Returns a span from the start of `self` to the end of `other`.
     pub fn to(self, other: Span) -> Span {
-        Span { file: self.file, start: self.start, end: other.end }
+        Span {
+            file: self.file,
+            start: self.start,
+            end: other.end,
+        }
     }
 }
 
@@ -34,7 +38,11 @@ impl SourceFile {
                 line_starts.push(i as u32 + 1);
             }
         }
-        SourceFile { path, text, line_starts }
+        SourceFile {
+            path,
+            text,
+            line_starts,
+        }
     }
 
     /// Returns the 1-based line and column of a byte offset. Columns count characters, not bytes.
@@ -101,7 +109,9 @@ mod tests {
     #[test]
     fn line_col() {
         let mut sources = SourceMap::default();
-        let id = sources.add("test.jo".into(), "ab\ncd\n\nef".into()).unwrap();
+        let id = sources
+            .add("test.jo".into(), "ab\ncd\n\nef".into())
+            .unwrap();
         let file = sources.get(id);
         assert_eq!(file.line_col(0), (1, 1));
         assert_eq!(file.line_col(1), (1, 2));
@@ -115,7 +125,9 @@ mod tests {
     #[test]
     fn line_text() {
         let mut sources = SourceMap::default();
-        let id = sources.add("test.jo".into(), "ab\r\ncd\n\nef".into()).unwrap();
+        let id = sources
+            .add("test.jo".into(), "ab\r\ncd\n\nef".into())
+            .unwrap();
         let file = sources.get(id);
         assert_eq!(file.line_text(1), "ab");
         assert_eq!(file.line_text(2), "cd");

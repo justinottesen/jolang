@@ -114,7 +114,9 @@ fn compile(options: &Options) -> Result<(), ()> {
     let text = std::fs::read_to_string(&options.input)
         .map_err(|err| eprintln!("error: could not read `{}`: {err}", options.input))?;
     let mut sources = SourceMap::default();
-    let file = sources.add(options.input.clone(), text).map_err(|message| eprintln!("error: {message}"))?;
+    let file = sources
+        .add(options.input.clone(), text)
+        .map_err(|message| eprintln!("error: {message}"))?;
 
     let text = &sources.get(file).text;
 
@@ -128,7 +130,8 @@ fn compile(options: &Options) -> Result<(), ()> {
         return Ok(());
     }
 
-    let ast = parser::parse(&tokens, text).map_err(|diagnostic| print_diagnostics(&[diagnostic], &sources))?;
+    let ast = parser::parse(&tokens, text)
+        .map_err(|diagnostic| print_diagnostics(&[diagnostic], &sources))?;
     if options.emits(Stage::Ast) {
         print!("{}", ast.dump(&sources));
         return Ok(());
@@ -156,8 +159,11 @@ fn compile(options: &Options) -> Result<(), ()> {
         return Ok(());
     }
 
-    let Output::Executable(path) = &options.output else { unreachable!("every stage is emitted above") };
-    link::assemble_and_link(&assembly, Path::new(path)).map_err(|message| eprintln!("error: {message}"))
+    let Output::Executable(path) = &options.output else {
+        unreachable!("every stage is emitted above")
+    };
+    link::assemble_and_link(&assembly, Path::new(path))
+        .map_err(|message| eprintln!("error: {message}"))
 }
 
 fn print_tokens(tokens: &[Token], sources: &SourceMap) {

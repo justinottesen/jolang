@@ -1,7 +1,9 @@
 //! Builds an AST from tokens by recursive descent: each grammar rule in design/language.md is one
 //! function, which consumes the tokens for that rule.
 
-use crate::ast::{Ast, BinaryOp, BinaryOpKind, Expr, ExprId, ExprKind, FnDecl, Ident, Stmt, TypeExpr, UnaryOp};
+use crate::ast::{
+    Ast, BinaryOp, BinaryOpKind, Expr, ExprId, ExprKind, FnDecl, Ident, Stmt, TypeExpr, UnaryOp,
+};
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Token, TokenKind};
 use crate::source::Span;
@@ -9,7 +11,12 @@ use crate::source::Span;
 /// Parses a whole file. `tokens` must end with `Eof`, as the lexer guarantees. Stops at the first
 /// syntax error.
 pub fn parse(tokens: &[Token], source: &str) -> Result<Ast, Diagnostic> {
-    let mut parser = Parser { tokens, source, pos: 0, ast: Ast::default() };
+    let mut parser = Parser {
+        tokens,
+        source,
+        pos: 0,
+        ast: Ast::default(),
+    };
     parser.parse_file()?;
     Ok(parser.ast)
 }
@@ -43,7 +50,12 @@ impl Parser<'_> {
         let return_type = self.parse_type()?;
         let body = self.parse_block()?;
         let span = fn_token.span.to(self.ast.expr(body).span);
-        Ok(FnDecl { name, return_type, body, span })
+        Ok(FnDecl {
+            name,
+            return_type,
+            body,
+            span,
+        })
     }
 
     // type = IDENT | "(" ")" ;
@@ -83,10 +95,16 @@ impl Parser<'_> {
             match self.peek().kind {
                 TokenKind::Semicolon => {
                     self.advance();
-                    stmts.push(Stmt::Expr { expr, semicolon: true });
+                    stmts.push(Stmt::Expr {
+                        expr,
+                        semicolon: true,
+                    });
                 }
                 TokenKind::RBrace => break Some(expr),
-                _ if block_like => stmts.push(Stmt::Expr { expr, semicolon: false }),
+                _ if block_like => stmts.push(Stmt::Expr {
+                    expr,
+                    semicolon: false,
+                }),
                 _ => return Err(self.error_expected("`;` or `}`")),
             }
         };
@@ -94,7 +112,10 @@ impl Parser<'_> {
 
         let stmts = self.ast.add_stmts(stmts);
         let span = open.span.to(close.span);
-        Ok(self.ast.add_expr(Expr { kind: ExprKind::Block { stmts, tail }, span }))
+        Ok(self.ast.add_expr(Expr {
+            kind: ExprKind::Block { stmts, tail },
+            span,
+        }))
     }
 
     // let_stmt = "let" "mut"? IDENT ( ":" type )? "=" expr ";" ;
@@ -109,7 +130,13 @@ impl Parser<'_> {
         self.expect(TokenKind::Eq)?;
         let init = self.parse_expr()?;
         let semicolon = self.expect(TokenKind::Semicolon)?;
-        Ok(Stmt::Let { mutable, name, ty, init, span: let_token.span.to(semicolon.span) })
+        Ok(Stmt::Let {
+            mutable,
+            name,
+            ty,
+            init,
+            span: let_token.span.to(semicolon.span),
+        })
     }
 
     // expr = binary ( "=" expr )? ;
@@ -120,7 +147,10 @@ impl Parser<'_> {
         }
         let value = self.parse_expr()?;
         let span = self.span_of(target).to(self.span_of(value));
-        Ok(self.ast.add_expr(Expr { kind: ExprKind::Assign { target, value }, span }))
+        Ok(self.ast.add_expr(Expr {
+            kind: ExprKind::Assign { target, value },
+            span,
+        }))
     }
 
     // binary = cast ( binary_op cast )* ;
@@ -138,10 +168,15 @@ impl Parser<'_> {
             // of equal precedence left-associative: `a - b - c` is `(a - b) - c`.
             let rhs = self.parse_binary(precedence + 1)?;
             let span = self.span_of(lhs).to(self.span_of(rhs));
-            lhs = self.ast.add_expr(Expr { kind: ExprKind::Binary { op, lhs, rhs }, span });
+            lhs = self.ast.add_expr(Expr {
+                kind: ExprKind::Binary { op, lhs, rhs },
+                span,
+            });
 
             // Comparisons don't associate at all: `a < b < c` is an error.
-            if is_comparison(op) && binary_op(self.peek().kind).is_some_and(|(next, _)| is_comparison(next)) {
+            if is_comparison(op)
+                && binary_op(self.peek().kind).is_some_and(|(next, _)| is_comparison(next))
+            {
                 let message = "comparisons can't be chained; to compare with both sides, use `and`, as in \
                                `a < b and b < c`";
                 return Err(Diagnostic::error(message, self.peek().span));
@@ -162,7 +197,14 @@ impl Parser<'_> {
             self.advance();
             let ty = self.parse_type()?;
             let span = self.span_of(operand).to(ty.span());
-            operand = self.ast.add_expr(Expr { kind: ExprKind::Cast { operand, ty, wrapping }, span });
+            operand = self.ast.add_expr(Expr {
+                kind: ExprKind::Cast {
+                    operand,
+                    ty,
+                    wrapping,
+                },
+                span,
+            });
         }
     }
 
@@ -177,7 +219,10 @@ impl Parser<'_> {
         let op_token = self.advance();
         let operand = self.parse_unary()?;
         let span = op_token.span.to(self.span_of(operand));
-        Ok(self.ast.add_expr(Expr { kind: ExprKind::Unary { op, operand }, span }))
+        Ok(self.ast.add_expr(Expr {
+            kind: ExprKind::Unary { op, operand },
+            span,
+        }))
     }
 
     // primary = INTEGER | "true" | "false" | IDENT | block | if_expr | "(" expr ")" | "(" ")" ;
@@ -194,7 +239,10 @@ impl Parser<'_> {
             _ => return Err(self.error_expected("expression")),
         };
         self.advance();
-        Ok(self.ast.add_expr(Expr { kind, span: token.span }))
+        Ok(self.ast.add_expr(Expr {
+            kind,
+            span: token.span,
+        }))
     }
 
     // if_expr = "if" expr block ( "else" ( if_expr | block ) )? ;
@@ -210,8 +258,17 @@ impl Parser<'_> {
                 _ => return Err(self.error_expected("`{` or `if`")),
             }),
         };
-        let span = if_token.span.to(self.span_of(else_branch.unwrap_or(then_branch)));
-        Ok(self.ast.add_expr(Expr { kind: ExprKind::If { cond, then_branch, else_branch }, span }))
+        let span = if_token
+            .span
+            .to(self.span_of(else_branch.unwrap_or(then_branch)));
+        Ok(self.ast.add_expr(Expr {
+            kind: ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            },
+            span,
+        }))
     }
 
     /// Parses `()`, or an expression in parentheses. Parentheses only group, so they don't appear
@@ -219,7 +276,10 @@ impl Parser<'_> {
     fn parse_parenthesized(&mut self) -> ParseResult<ExprId> {
         let open = self.expect(TokenKind::LParen)?;
         if let Some(close) = self.eat(TokenKind::RParen) {
-            return Ok(self.ast.add_expr(Expr { kind: ExprKind::Unit, span: open.span.to(close.span) }));
+            return Ok(self.ast.add_expr(Expr {
+                kind: ExprKind::Unit,
+                span: open.span.to(close.span),
+            }));
         }
         let inner = self.parse_expr()?;
         self.expect(TokenKind::RParen)?;
@@ -245,7 +305,11 @@ impl Parser<'_> {
 
     /// Consumes the current token if it's of the given kind.
     fn eat(&mut self, kind: TokenKind) -> Option<Token> {
-        if self.peek().kind == kind { Some(self.advance()) } else { None }
+        if self.peek().kind == kind {
+            Some(self.advance())
+        } else {
+            None
+        }
     }
 
     fn expect(&mut self, kind: TokenKind) -> ParseResult<Token> {
@@ -259,7 +323,9 @@ impl Parser<'_> {
     /// Expects an identifier. `what` describes the role it plays, for the error message.
     fn expect_ident(&mut self, what: &str) -> ParseResult<Ident> {
         if self.peek().kind == TokenKind::Ident {
-            Ok(Ident { span: self.advance().span })
+            Ok(Ident {
+                span: self.advance().span,
+            })
         } else {
             Err(self.error_expected(what))
         }
@@ -282,9 +348,14 @@ impl Parser<'_> {
         let span = match self.pos.checked_sub(1).map(|i| self.tokens[i].span) {
             Some(previous)
                 if found.kind == TokenKind::Eof
-                    || self.source[previous.end as usize..found.span.start as usize].contains('\n') =>
+                    || self.source[previous.end as usize..found.span.start as usize]
+                        .contains('\n') =>
             {
-                Span { start: previous.end, end: previous.end, ..previous }
+                Span {
+                    start: previous.end,
+                    end: previous.end,
+                    ..previous
+                }
             }
             _ => found.span,
         };
@@ -331,7 +402,10 @@ mod tests {
         let mut sources = SourceMap::default();
         let file = sources.add("test.jo".into(), text.into()).unwrap();
         let (tokens, diagnostics) = lexer::lex(file, text);
-        assert!(diagnostics.is_empty(), "unexpected lexer diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected lexer diagnostics: {diagnostics:?}"
+        );
         (parse(&tokens, text), sources)
     }
 
@@ -352,12 +426,20 @@ mod tests {
         let decl = &ast.fns[0];
         assert_eq!(sources.text(decl.name.span), "main");
         assert_eq!(sources.text(decl.span), text);
-        let TypeExpr::Name(return_type) = decl.return_type else { panic!("return type is not a name") };
+        let TypeExpr::Name(return_type) = decl.return_type else {
+            panic!("return type is not a name")
+        };
         assert_eq!(sources.text(return_type.span), "u8");
 
         let body = ast.expr(decl.body);
         assert_eq!(sources.text(body.span), "{ 0 }");
-        let ExprKind::Block { stmts, tail: Some(tail) } = body.kind else { panic!("unexpected body: {body:?}") };
+        let ExprKind::Block {
+            stmts,
+            tail: Some(tail),
+        } = body.kind
+        else {
+            panic!("unexpected body: {body:?}")
+        };
         assert!(ast.stmts(stmts).is_empty());
         let tail = ast.expr(tail);
         assert!(matches!(tail.kind, ExprKind::Integer));
@@ -392,7 +474,10 @@ mod tests {
         name `y`
         integer `2`
     name `y`";
-        assert_eq!(dump_body("{ let x: u8 = 1; let mut y = x; y = 2; y }"), expected);
+        assert_eq!(
+            dump_body("{ let x: u8 = 1; let mut y = x; y = 2; y }"),
+            expected
+        );
     }
 
     #[test]
@@ -439,20 +524,38 @@ mod tests {
         let text = format!("fn main() -> u8 {{ {expr} }}");
         let (ast, _) = parse_str(&text);
         let ast = ast.unwrap();
-        let ExprKind::Block { tail: Some(tail), .. } = ast.expr(ast.fns[0].body).kind else { panic!() };
+        let ExprKind::Block {
+            tail: Some(tail), ..
+        } = ast.expr(ast.fns[0].body).kind
+        else {
+            panic!()
+        };
         fn show(ast: &Ast, id: ExprId, text: &str) -> String {
             let expr = ast.expr(id);
             match expr.kind {
                 ExprKind::Binary { op, lhs, rhs } => {
-                    format!("({} {} {})", show(ast, lhs, text), op.symbol(), show(ast, rhs, text))
+                    format!(
+                        "({} {} {})",
+                        show(ast, lhs, text),
+                        op.symbol(),
+                        show(ast, rhs, text)
+                    )
                 }
-                ExprKind::Unary { op, operand } => format!("({}{})", op.symbol(), show(ast, operand, text)),
-                ExprKind::Cast { operand, ty, wrapping } => {
+                ExprKind::Unary { op, operand } => {
+                    format!("({}{})", op.symbol(), show(ast, operand, text))
+                }
+                ExprKind::Cast {
+                    operand,
+                    ty,
+                    wrapping,
+                } => {
                     let keyword = if wrapping { "as%" } else { "as" };
                     let ty = &text[ty.span().start as usize..ty.span().end as usize];
                     format!("({} {keyword} {ty})", show(ast, operand, text))
                 }
-                ExprKind::Assign { target, value } => format!("({} = {})", show(ast, target, text), show(ast, value, text)),
+                ExprKind::Assign { target, value } => {
+                    format!("({} = {})", show(ast, target, text), show(ast, value, text))
+                }
                 _ => text[expr.span.start as usize..expr.span.end as usize].to_string(),
             }
         }
@@ -476,7 +579,10 @@ mod tests {
         assert_eq!(grouping("x = a + b"), "(x = (a + b))");
         assert_eq!(grouping("x = y = a"), "(x = (y = a))");
         assert_eq!(grouping("a + 1 < b * 2"), "((a + 1) < (b * 2))");
-        assert_eq!(grouping("a < b and c == d or e"), "(((a < b) and (c == d)) or e)");
+        assert_eq!(
+            grouping("a < b and c == d or e"),
+            "(((a < b) and (c == d)) or e)"
+        );
         assert_eq!(grouping("a or b and c"), "(a or (b and c))");
         assert_eq!(grouping("a and b and c"), "((a and b) and c)");
         assert_eq!(grouping("!a and !b"), "((!a) and (!b))");
@@ -521,8 +627,16 @@ mod tests {
     fn parentheses_and_unit() {
         let (ast, sources) = parse_str("fn main() -> u8 { let u: () = (); ((x)) }");
         let ast = ast.unwrap();
-        let ExprKind::Block { stmts, tail: Some(tail) } = ast.expr(ast.fns[0].body).kind else { panic!() };
-        let Stmt::Let { init, .. } = ast.stmts(stmts)[0] else { panic!() };
+        let ExprKind::Block {
+            stmts,
+            tail: Some(tail),
+        } = ast.expr(ast.fns[0].body).kind
+        else {
+            panic!()
+        };
+        let Stmt::Let { init, .. } = ast.stmts(stmts)[0] else {
+            panic!()
+        };
         assert!(matches!(ast.expr(init).kind, ExprKind::Unit));
         // Parentheses only group; the expression inside is used directly.
         assert!(matches!(ast.expr(tail).kind, ExprKind::Name(_)));
@@ -560,7 +674,12 @@ mod tests {
     fn multiple_functions() {
         // The grammar allows any number of functions; the checker restricts it.
         let (ast, sources) = parse_str("fn a() -> u8 { 1 } fn b() -> u8 { 2 }");
-        let names: Vec<&str> = ast.unwrap().fns.iter().map(|f| sources.text(f.name.span)).collect();
+        let names: Vec<&str> = ast
+            .unwrap()
+            .fns
+            .iter()
+            .map(|f| sources.text(f.name.span))
+            .collect();
         assert_eq!(names, ["a", "b"]);
     }
 
@@ -575,24 +694,60 @@ mod tests {
             ("fn main() -> { 0 }", "expected type, found `{`"),
             ("fn main() -> u8 0", "expected `{`, found integer `0`"),
             ("fn main() -> u8 { ; }", "expected expression, found `;`"),
-            ("fn main() -> u8 { 0 1 }", "expected `;` or `}`, found integer `1`"),
-            ("fn main() -> u8 { 0", "expected `;` or `}`, found end of file"),
-            ("fn main() -> u8 {", "expected expression, found end of file"),
+            (
+                "fn main() -> u8 { 0 1 }",
+                "expected `;` or `}`, found integer `1`",
+            ),
+            (
+                "fn main() -> u8 { 0",
+                "expected `;` or `}`, found end of file",
+            ),
+            (
+                "fn main() -> u8 {",
+                "expected expression, found end of file",
+            ),
             ("fn main() -> ( { }", "expected `)`, found `{`"),
-            ("fn main() -> u8 { let = 1; }", "expected variable name, found `=`"),
-            ("fn main() -> u8 { let mut mut x = 1; }", "expected variable name, found `mut`"),
-            ("fn main() -> u8 { let x 1; }", "expected `=`, found integer `1`"),
-            ("fn main() -> u8 { let x: = 1; }", "expected type, found `=`"),
+            (
+                "fn main() -> u8 { let = 1; }",
+                "expected variable name, found `=`",
+            ),
+            (
+                "fn main() -> u8 { let mut mut x = 1; }",
+                "expected variable name, found `mut`",
+            ),
+            (
+                "fn main() -> u8 { let x 1; }",
+                "expected `=`, found integer `1`",
+            ),
+            (
+                "fn main() -> u8 { let x: = 1; }",
+                "expected type, found `=`",
+            ),
             ("fn main() -> u8 { let x = 1 }", "expected `;`, found `}`"),
-            ("fn main() -> u8 { let x = ; }", "expected expression, found `;`"),
+            (
+                "fn main() -> u8 { let x = ; }",
+                "expected expression, found `;`",
+            ),
             ("fn main() -> u8 { x = }", "expected expression, found `}`"),
-            ("fn main() -> u8 { { 1 } = 2; }", "expected expression, found `=`"),
+            (
+                "fn main() -> u8 { { 1 } = 2; }",
+                "expected expression, found `=`",
+            ),
             ("fn main() -> u8 { 1 + }", "expected expression, found `}`"),
-            ("fn main() -> u8 { 1 + * 2 }", "expected expression, found `*`"),
+            (
+                "fn main() -> u8 { 1 + * 2 }",
+                "expected expression, found `*`",
+            ),
             ("fn main() -> u8 { (1 + 2 }", "expected `)`, found `}`"),
             ("fn main() -> u8 { x as }", "expected type, found `}`"),
-            ("fn main() -> u8 { x as 5 }", "expected type, found integer `5`"),
-            ("fn main() -> u8 { a + %b }", "expected expression, found `%`"),
+            (
+                "fn main() -> u8 { x as 5 }",
+                "expected type, found integer `5`",
+            ),
+            (
+                "fn main() -> u8 { a + %b }",
+                "expected expression, found `%`",
+            ),
             (
                 "fn main() -> u8 { a < b < c }",
                 "comparisons can't be chained; to compare with both sides, use `and`, as in `a < b and b < c`",
@@ -601,10 +756,19 @@ mod tests {
                 "fn main() -> u8 { a == b != c }",
                 "comparisons can't be chained; to compare with both sides, use `and`, as in `a < b and b < c`",
             ),
-            ("fn main() -> u8 { if c 1 }", "expected `{`, found integer `1`"),
+            (
+                "fn main() -> u8 { if c 1 }",
+                "expected `{`, found integer `1`",
+            ),
             ("fn main() -> u8 { if { 1 } }", "expected `{`, found `}`"),
-            ("fn main() -> u8 { if c { 1 } else 2 }", "expected `{` or `if`, found integer `2`"),
-            ("fn main() -> u8 { else { 1 } }", "expected expression, found `else`"),
+            (
+                "fn main() -> u8 { if c { 1 } else 2 }",
+                "expected `{` or `if`, found integer `2`",
+            ),
+            (
+                "fn main() -> u8 { else { 1 } }",
+                "expected expression, found `else`",
+            ),
         ];
         for (text, message) in cases {
             assert_eq!(parse_error(text).message, message, "for {text:?}");
@@ -617,7 +781,10 @@ mod tests {
         let diagnostic = parse_error(text);
         assert_eq!(diagnostic.message, "expected `;`, found identifier `x`");
         let end_of_one = text.find("1\n").unwrap() as u32 + 1;
-        assert_eq!((diagnostic.span.start, diagnostic.span.end), (end_of_one, end_of_one));
+        assert_eq!(
+            (diagnostic.span.start, diagnostic.span.end),
+            (end_of_one, end_of_one)
+        );
 
         // On the same line, the error points at the unexpected token itself.
         let diagnostic = parse_error("fn main() -> u8 { let x: u8 = 1 x }");
