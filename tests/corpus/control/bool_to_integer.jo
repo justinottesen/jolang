@@ -1,0 +1,5 @@
+// There are no conversions between `bool` and integers.
+fn main() -> u8 {
+    let t = true;
+    t as u8  // expect-error: cannot convert `bool` to `u8`: only integers can be converted
+}

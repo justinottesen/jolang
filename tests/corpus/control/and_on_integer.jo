@@ -1,0 +1,4 @@
+fn main() -> u8 {
+    let x: u8 = 1;
+    if x and true { 1 } else { 0 }  // expect-error: expected `bool`, found `u8`
+}

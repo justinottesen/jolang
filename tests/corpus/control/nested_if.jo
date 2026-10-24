@@ -1,0 +1,11 @@
+// expect-exit: 0
+fn main() -> u8 {
+    let a: u8 = 3;
+    let b: u8 = 8;
+    let largest = if a > b {
+        if a > 5 { a } else { 5 }
+    } else {
+        if b > 5 { b } else { 5 }
+    };
+    if largest != 8 { 1 } else { 0 }
+}

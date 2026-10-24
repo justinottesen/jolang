@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{self, Ast, Ident, TypeExpr, UnaryOp};
+use crate::ast::{self, Ast, BinaryOpKind, Ident, TypeExpr, UnaryOp};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::hir::{self, Hir, IntType, LocalId, Type};
 use crate::intern::{Interner, Symbol};
@@ -125,6 +125,9 @@ impl Checker<'_> {
             TypeExpr::Name(name) => name,
         };
         let text = self.sources.text(name.span);
+        if text == "bool" {
+            return Ok(Type::Bool);
+        }
         match int_type_from_name(text) {
             Some(Ok(int)) => Ok(Type::Int(int)),
             Some(Err(())) => {
@@ -152,7 +155,7 @@ impl Checker<'_> {
                 let value = self.integer_value(digits, expr.span, expected, true)?;
                 hir::ExprKind::Integer { value }
             }
-            (ast::ExprKind::Unary { op, operand }, Type::Int(int)) => {
+            (ast::ExprKind::Unary { op: op @ (UnaryOp::Neg | UnaryOp::WrappingNeg), operand }, Type::Int(int)) => {
                 // Check the operand even if it can't be negated, to find errors in it too, and so
                 // the variables it uses count as used.
                 let operand = self.check_expr(operand, expected);
@@ -161,15 +164,19 @@ impl Checker<'_> {
                 }
                 hir::ExprKind::Unary { op, operand: operand? }
             }
-            // Both operands have the result's type.
-            (ast::ExprKind::Binary { op, lhs, rhs }, Type::Int(_)) => {
+            // Both operands of arithmetic have the result's type.
+            (ast::ExprKind::Binary { op, lhs, rhs }, Type::Int(_)) if op.kind() == BinaryOpKind::Arithmetic => {
                 let lhs = self.check_expr(lhs, expected);
                 let rhs = self.check_expr(rhs, expected);
                 hir::ExprKind::Binary { op, lhs: lhs?, rhs: rhs? }
             }
-            // The expected type passes through to the block's final expression.
+            // The expected type passes through to the block's final expression, and to both
+            // branches of an `if`.
             (ast::ExprKind::Block { stmts, tail }, _) => {
                 return self.check_block(expr.span, stmts, tail, Some(expected));
+            }
+            (ast::ExprKind::If { cond, then_branch, else_branch }, _) => {
+                return self.check_if(expr.span, cond, then_branch, else_branch, Some(expected));
             }
             // Anything else has a type of its own, which must match.
             _ => {
@@ -185,14 +192,62 @@ impl Checker<'_> {
     }
 
     /// Whether an expression gets its type from context, rather than having one of its own: a
-    /// literal, or arithmetic on only literals.
+    /// literal, arithmetic on only literals, or a block or `if` whose value is one of those.
     fn needs_context(&self, id: ast::ExprId) -> bool {
         match self.ast.expr(id).kind {
             ast::ExprKind::Integer => true,
-            ast::ExprKind::Unary { operand, .. } => self.needs_context(operand),
-            ast::ExprKind::Binary { lhs, rhs, .. } => self.needs_context(lhs) && self.needs_context(rhs),
+            ast::ExprKind::Unary { op, operand } => op != UnaryOp::Not && self.needs_context(operand),
+            ast::ExprKind::Binary { op, lhs, rhs } => {
+                op.kind() == BinaryOpKind::Arithmetic && self.needs_context(lhs) && self.needs_context(rhs)
+            }
+            ast::ExprKind::Block { tail: Some(tail), .. } => self.needs_context(tail),
+            ast::ExprKind::If { then_branch, else_branch: Some(else_branch), .. } => {
+                self.needs_context(then_branch) && self.needs_context(else_branch)
+            }
             _ => false,
         }
+    }
+
+    /// Checks an `if`. If `expected` is given, the `if` must have that type.
+    fn check_if(
+        &mut self,
+        span: Span,
+        cond: ast::ExprId,
+        then_branch: ast::ExprId,
+        else_branch: Option<ast::ExprId>,
+        expected: Option<Type>,
+    ) -> CheckResult<hir::ExprId> {
+        let cond = self.check_expr(cond, Type::Bool);
+        let (then_branch, else_branch, ty) = match (else_branch, expected) {
+            // Without an `else`, the `if` has type `()`, so its block must too.
+            (None, _) => match expected.filter(|&expected| expected != Type::Unit) {
+                Some(expected) => {
+                    // The block was probably meant to give the `if`'s value. Check it against that
+                    // type to find any errors inside it, and report just the missing `else`.
+                    let _ = self.check_expr(then_branch, expected);
+                    let message = format!("expected `{expected}`, found `()`, because this `if` has no `else`");
+                    return Err(self.error(message, span));
+                }
+                None => (self.check_expr(then_branch, Type::Unit)?, None, Type::Unit),
+            },
+            (Some(else_branch), Some(expected)) => {
+                let then_branch = self.check_expr(then_branch, expected);
+                let else_branch = self.check_expr(else_branch, expected);
+                (then_branch?, Some(else_branch?), expected)
+            }
+            // Infer whichever branch has a type of its own, and check the other against it.
+            (Some(else_branch), None) => {
+                let swap = self.needs_context(then_branch) && !self.needs_context(else_branch);
+                let (first, second) = if swap { (else_branch, then_branch) } else { (then_branch, else_branch) };
+                let first = self.infer_expr(first)?;
+                let ty = self.hir.expr(first).ty;
+                let second = self.check_expr(second, ty)?;
+                let (then_branch, else_branch) = if swap { (second, first) } else { (first, second) };
+                (then_branch, Some(else_branch), ty)
+            }
+        };
+        let kind = hir::ExprKind::If { cond: cond?, then_branch, else_branch };
+        Ok(self.hir.add_expr(hir::Expr { kind, ty, span }))
     }
 
     /// Checks an expression whose type isn't known from context, and determines it.
@@ -213,8 +268,16 @@ impl Checker<'_> {
                 (hir::ExprKind::Local(local), self.function.locals[local.0 as usize].ty)
             }
             ast::ExprKind::Unit => (hir::ExprKind::Unit, Type::Unit),
+            ast::ExprKind::Bool(value) => (hir::ExprKind::Bool(value), Type::Bool),
             ast::ExprKind::Block { stmts, tail } => return self.check_block(expr.span, stmts, tail, None),
+            ast::ExprKind::If { cond, then_branch, else_branch } => {
+                return self.check_if(expr.span, cond, then_branch, else_branch, None);
+            }
             ast::ExprKind::Assign { target, value } => (self.check_assign(target, value)?, Type::Unit),
+            ast::ExprKind::Unary { op: UnaryOp::Not, operand } => {
+                let operand = self.check_expr(operand, Type::Bool)?;
+                (hir::ExprKind::Unary { op: UnaryOp::Not, operand }, Type::Bool)
+            }
             ast::ExprKind::Unary { op, operand } => {
                 let operand = self.infer_expr(operand)?;
                 let ty = self.hir.expr(operand).ty;
@@ -223,23 +286,34 @@ impl Checker<'_> {
                     Type::Int(int) => {
                         return Err(self.error(format!("cannot negate a value of unsigned type `{int}`"), expr.span));
                     }
-                    Type::Unit => return Err(self.error("cannot negate a value of type `()`", expr.span)),
+                    _ => return Err(self.error(format!("cannot negate a value of type `{ty}`"), expr.span)),
                 }
+            }
+            // Logical operators short-circuit, but for typing they are simple: both sides are `bool`.
+            ast::ExprKind::Binary { op, lhs, rhs } if op.kind() == BinaryOpKind::Logical => {
+                let lhs = self.check_expr(lhs, Type::Bool);
+                let rhs = self.check_expr(rhs, Type::Bool);
+                (hir::ExprKind::Binary { op, lhs: lhs?, rhs: rhs? }, Type::Bool)
             }
             ast::ExprKind::Binary { op, lhs, rhs } => {
                 // Infer whichever operand has a type of its own, and check the other against it. So
-                // in `1 + x`, the `1` takes its type from `x`.
+                // in `1 + x` or `1 < x`, the `1` takes its type from `x`.
                 let swap = self.needs_context(lhs) && !self.needs_context(rhs);
                 let (first, second) = if swap { (rhs, lhs) } else { (lhs, rhs) };
                 let first = self.infer_expr(first)?;
                 let ty = self.hir.expr(first).ty;
-                if !matches!(ty, Type::Int(_)) {
+                let allowed = match op.kind() {
+                    BinaryOpKind::Equality => matches!(ty, Type::Int(_) | Type::Bool),
+                    _ => matches!(ty, Type::Int(_)),
+                };
+                if !allowed {
                     let message = format!("operator `{}` cannot be applied to type `{ty}`", op.symbol());
                     return Err(self.error(message, expr.span));
                 }
                 let second = self.check_expr(second, ty)?;
                 let (lhs, rhs) = if swap { (second, first) } else { (first, second) };
-                (hir::ExprKind::Binary { op, lhs, rhs }, ty)
+                let result = if op.kind() == BinaryOpKind::Arithmetic { ty } else { Type::Bool };
+                (hir::ExprKind::Binary { op, lhs, rhs }, result)
             }
             ast::ExprKind::Cast { operand, ty, wrapping } => {
                 let target = self.resolve_type(ty)?;
@@ -730,6 +804,92 @@ mod tests {
         assert_eq!(
             diagnostics("fn main() -> u8 { let x: u8 = 1; let y: () = x as (); y; 0 }"),
             ["error: cannot convert `u8` to `()`: only integers can be converted"]
+        );
+    }
+
+    #[test]
+    fn booleans_and_comparisons() {
+        assert!(diagnostics("fn main() -> u8 { let a = true; let b = !a or a and false; if b { 1 } else { 0 } }").is_empty());
+        // A literal on the left of a comparison takes the type of the right.
+        assert!(diagnostics("fn main() -> u8 { let x: u8 = 3; if 2 < x { 1 } else { 0 } }").is_empty());
+        assert!(diagnostics("fn main() -> u8 { let a = true; if a == false { 1 } else { 0 } }").is_empty());
+        assert!(diagnostics("fn main() -> u8 { let x: i64 = -1; if x != 0 and x >= -5 { 1 } else { 0 } }").is_empty());
+
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let a = true; if a < true { 1 } else { 0 } }"),
+            ["error: operator `<` cannot be applied to type `bool`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let x: u8 = 1; let y: u16 = 2; if x == y { 1 } else { 0 } }"),
+            ["error: expected `u8`, found `u16`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let a = true; let b = a + a; b; 0 }"),
+            ["error: operator `+` cannot be applied to type `bool`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let x: u8 = 1; if !x { 1 } else { 0 } }"),
+            ["error: expected `bool`, found `u8`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let x: u8 = 1; let c = x and true; if c { 1 } else { 0 } }"),
+            ["error: expected `bool`, found `u8`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let b = true; let c = -b; c; 0 }"),
+            ["error: cannot negate a value of type `bool`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { true as u8 }"),
+            ["error: cannot convert `bool` to `u8`: only integers can be converted"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let b: bool = 1; if b { 1 } else { 0 } }"),
+            ["error: expected `bool`, found integer `1`"]
+        );
+    }
+
+    #[test]
+    fn if_expressions() {
+        assert!(diagnostics("fn main() -> u8 { let c = true; if c { 1 } else if !c { 2 } else { 3 } }").is_empty());
+        assert!(diagnostics("fn main() -> u8 { let mut x: u8 = 0; let c = true; if c { x = 1 } x }").is_empty());
+        // Without an expected type, a literal branch takes the type of the other branch.
+        assert!(diagnostics("fn main() -> u8 { let c = true; let x: u8 = 1; let y = if c { 2 } else { x }; y }").is_empty());
+
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let x: u8 = 1; if x { 1 } else { 2 } }"),
+            ["error: expected `bool`, found `u8`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { if true { 1 } else { () } }"),
+            ["error: expected `u8`, found `()`"]
+        );
+        assert_eq!(
+            diagnostics(
+                "fn main() -> u8 { let a: u8 = 1; let b: u16 = 2; let c = true; let d = if c { a } else { b }; d }"
+            ),
+            ["error: expected `u8`, found `u16`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { if true { 1 } }"),
+            ["error: expected `u8`, found `()`, because this `if` has no `else`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let c = true; if c { 5 } 0 }"),
+            ["error: expected `()`, found integer `5`"]
+        );
+        assert_eq!(
+            diagnostics("fn main() -> u8 { let c = true; let x = if c { 1 } else { 2 }; x }"),
+            ["error: cannot infer the type of integer `1`; it needs a type from its context, such as a type annotation"]
+        );
+        // Errors in the condition and both branches are all reported.
+        assert_eq!(
+            diagnostics("fn main() -> u8 { if 1 { 256 } else { -1 } }"),
+            [
+                "error: expected `bool`, found integer `1`",
+                "error: `256` does not fit in `u8` (range 0 to 255)",
+                "error: cannot negate a value of unsigned type `u8`",
+            ]
         );
     }
 

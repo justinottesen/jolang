@@ -1,0 +1,5 @@
+fn main() -> u8 {
+    let x: u8 = 1;
+    let b = x as bool;  // expect-error: cannot convert `u8` to `bool`: only integers can be converted
+    if b { 1 } else { 0 }
+}

@@ -45,8 +45,13 @@ a forgotten `;` at the end of a line is reported at the end of that line, not at
 next.
 
 Inside a block, an expression followed by `}` is the block's final expression; followed by `;` it
-is a statement. A block at the start of a statement always ends the statement, so `{ ... } = 1`
-does not parse as an assignment. Rust parses it the same way.
+is a statement. A block or `if` at the start of a statement always ends the statement, so
+`{ ... } = 1` does not parse as an assignment. Rust parses it the same way.
+
+Binary operators are parsed by *precedence climbing*: one function handles every binary operator,
+using a table of precedences, instead of one grammar rule per precedence level. Comparisons are
+non-associative: after parsing `a < b`, another comparison operator is a syntax error rather than
+being parsed as `(a < b) < c`.
 
 The parser accepts more than the language allows (see the grammar in [language.md](language.md)).
 Rules like "exactly one function, named `main`" are the checker's job.
@@ -74,6 +79,12 @@ stages can assume it is valid.
 
 Checking an expression that has no special checking rule falls back to inferring its type and
 comparing it with the expected one.
+
+When two expressions must have the same type (the operands of `+` or `<`, or the two branches of an
+`if`) and there is no expected type, the checker infers whichever one has a type of its own and
+checks the other against it. So in `1 + x`, or `if c { 1 } else { x }`, the `1` gets the type of
+`x`. An expression "has a type of its own" unless it is a literal, or arithmetic, a block, or an
+`if` made only of literals.
 
 An untyped literal with no context to check it against is an error. The alternative design is
 Rust-style inference, where the checker creates unknown types and solves for them using
@@ -181,6 +192,33 @@ an edge to a panic path, because a Rust panic unwinds and runs destructors. Line
 benefits from this: a resource doesn't need to be consumed on a path that ends in a trap, since the
 process is gone (and the OS reclaims what it held).
 
+**Control flow.** Besides `return`, a block can end with `goto bbN`, or with
+`branch(cond) -> [true: bbN, false: bbM]` on a `bool` operand. The builder creates blocks before
+filling them in, so a branch can name blocks that come later. An `if` lowers to a branch, one block
+per arm, and a *join* block where the arms meet. Each arm stores its value into the `if`'s
+destination, so the join block needs nothing special to pick up the result:
+
+```
+    branch(copy _1) -> [true: bb1, false: bb2]
+  bb1:
+    _0 = const 1_u8
+    goto bb3
+  bb2:
+    _0 = const 2_u8
+    goto bb3
+  bb3:
+    return
+```
+
+An `if` without `else` branches straight to the join block when the condition is false.
+
+`and` and `or` lower to the same shape, which is how they short-circuit. `a and b` stores `a` in
+the destination, then branches on it: if true, it evaluates `b` into the destination; if false, it
+skips straight to the join, leaving `false` there. `or` is the mirror image.
+
+Join points are where the linearity checker will merge what each path did, for example requiring
+both arms of an `if` to consume the same resources.
+
 ### Codegen and printing
 
 Codegen produces a list of structured x86-64 instructions (a Rust enum), not text. The printer turns
@@ -226,6 +264,13 @@ A wrapping operation is the same computation with no check: storing the low bits
 Division checks for a zero divisor, and for signed types also for `MIN / -1`, before dividing,
 since x86's `idiv` instruction would fault on both. Conversions load the operand extended to 64
 bits, compare it against the target type's range if checked, and store the low bits.
+
+**Booleans and branches.** A `bool` is a byte holding 0 or 1. A comparison is `cmp` followed by
+`setcc`, which writes the result as 0 or 1; the condition depends on signedness (`setl` for signed
+less-than, `setb` for unsigned). `!` flips the low bit with `xor`. A `branch` tests its condition
+and jumps with `jne`/`je`. Blocks are emitted in order, so a `goto` to the very next block, or a
+branch whose target is the very next block, falls through instead of jumping. That is the only
+optimization codegen does.
 
 Every failed check jumps to a single `ud2` instruction at the end of the function, which makes the
 CPU fault, and Linux kills the process with `SIGILL`.
@@ -355,6 +400,27 @@ A trap test passes whenever the program traps, so it can't tell an intended trap
 bug that traps everywhere. Pair each trap test with programs that do the same operation without
 overflowing (the `boundaries.jo` and wrapping tests), so a check that fires too eagerly shows up as
 a failure there.
+
+**Programs that compute values check them themselves.** Comments in a test are not checked, and a
+single exit status can't confirm several values. So a test checks each value with `if`, gives each
+failed check its own exit status, and exits 0 when everything is right:
+
+```jo
+// expect-exit: 0
+fn main() -> u8 {
+    let a: u8 = 2 + 3 * 4;
+    let b: u8 = (2 + 3) * 4;
+    if a != 14 { 1 }
+    else if b != 20 { 2 }
+    else { 0 }
+}
+```
+
+A failure then reports, for example, "expected exit status 0, got 2", which identifies the check
+that failed.
+
+Comments that start with `expect` are read as directives, and an unknown one fails the test to catch
+typos like `expect-eror`. So other comments in tests shouldn't start with that word.
 
 The test runner is [tests/corpus.rs](../tests/corpus.rs). It runs with `cargo test`, and like other
 tests can be filtered by name, for example `cargo test lexer` runs only the corpus files whose path

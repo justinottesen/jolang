@@ -1,0 +1,7 @@
+// expect-exit: 0
+// `if` is an expression, so it can be an operand.
+fn main() -> u8 {
+    let c = true;
+    let x: u8 = 1 + if c { 2 } else { 3 } * 10;
+    if x != 21 { 1 } else { 0 }
+}

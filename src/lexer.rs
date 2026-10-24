@@ -12,6 +12,12 @@ pub enum TokenKind {
     As,
     /// `as%`, a wrapping conversion.
     AsPercent,
+    If,
+    Else,
+    True,
+    False,
+    And,
+    Or,
 
     Ident,
     Integer,
@@ -35,6 +41,13 @@ pub enum TokenKind {
     PlusPercent,
     MinusPercent,
     StarPercent,
+    Bang,
+    EqEq,
+    NotEq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 
     /// Marks the end of the file. Always the last token.
     Eof,
@@ -49,6 +62,12 @@ impl TokenKind {
             TokenKind::Mut => "`mut`",
             TokenKind::As => "`as`",
             TokenKind::AsPercent => "`as%`",
+            TokenKind::If => "`if`",
+            TokenKind::Else => "`else`",
+            TokenKind::True => "`true`",
+            TokenKind::False => "`false`",
+            TokenKind::And => "`and`",
+            TokenKind::Or => "`or`",
             TokenKind::Ident => "identifier",
             TokenKind::Integer => "integer",
             TokenKind::LParen => "`(`",
@@ -67,6 +86,13 @@ impl TokenKind {
             TokenKind::PlusPercent => "`+%`",
             TokenKind::MinusPercent => "`-%`",
             TokenKind::StarPercent => "`*%`",
+            TokenKind::Bang => "`!`",
+            TokenKind::EqEq => "`==`",
+            TokenKind::NotEq => "`!=`",
+            TokenKind::Lt => "`<`",
+            TokenKind::Le => "`<=`",
+            TokenKind::Gt => "`>`",
+            TokenKind::Ge => "`>=`",
             TokenKind::Eof => "end of file",
         }
     }
@@ -109,7 +135,10 @@ impl Lexer<'_> {
                 b'-' if self.peek(1) == Some(b'>') => self.punctuation(TokenKind::Arrow, 2),
                 b';' => self.punctuation(TokenKind::Semicolon, 1),
                 b':' => self.punctuation(TokenKind::Colon, 1),
-                b'=' => self.punctuation(TokenKind::Eq, 1),
+                b'=' => self.followed_by_eq(TokenKind::Eq, TokenKind::EqEq),
+                b'!' => self.followed_by_eq(TokenKind::Bang, TokenKind::NotEq),
+                b'<' => self.followed_by_eq(TokenKind::Lt, TokenKind::Le),
+                b'>' => self.followed_by_eq(TokenKind::Gt, TokenKind::Ge),
                 b'+' => self.operator(TokenKind::Plus, TokenKind::PlusPercent),
                 b'-' => self.operator(TokenKind::Minus, TokenKind::MinusPercent),
                 b'*' => self.operator(TokenKind::Star, TokenKind::StarPercent),
@@ -164,6 +193,16 @@ impl Lexer<'_> {
         }
     }
 
+    /// Lexes a one-character operator, which becomes a different one if immediately followed by
+    /// `=`, like `<` and `<=`.
+    fn followed_by_eq(&mut self, plain: TokenKind, with_eq: TokenKind) {
+        if self.peek(1) == Some(b'=') {
+            self.punctuation(with_eq, 2);
+        } else {
+            self.punctuation(plain, 1);
+        }
+    }
+
     fn integer(&mut self, start: usize) {
         // Consume anything that could continue the literal, so `123abc` is reported as one bad
         // literal instead of an integer followed by an identifier.
@@ -189,6 +228,12 @@ impl Lexer<'_> {
                 TokenKind::AsPercent
             }
             "as" => TokenKind::As,
+            "if" => TokenKind::If,
+            "else" => TokenKind::Else,
+            "true" => TokenKind::True,
+            "false" => TokenKind::False,
+            "and" => TokenKind::And,
+            "or" => TokenKind::Or,
             _ => TokenKind::Ident,
         };
         self.push(kind, start);
@@ -262,6 +307,18 @@ mod tests {
         assert_eq!(kinds("a+%b"), [Ident, PlusPercent, Ident, Eof]);
         assert_eq!(kinds("x as %"), [Ident, As, Percent, Eof]);
         assert_eq!(kinds("ask as_ cast"), [Ident, Ident, Ident, Eof]);
+    }
+
+    #[test]
+    fn comparisons_and_logic() {
+        use TokenKind::*;
+        assert_eq!(kinds("= == ! != < <= > >= ->"), [Eq, EqEq, Bang, NotEq, Lt, Le, Gt, Ge, Arrow, Eof]);
+        assert_eq!(kinds("a===b"), [Ident, EqEq, Eq, Ident, Eof]);
+        assert_eq!(
+            kinds("if else true false and or"),
+            [If, Else, True, False, And, Or, Eof]
+        );
+        assert_eq!(kinds("iffy elsewhere android order"), [Ident, Ident, Ident, Ident, Eof]);
     }
 
     #[test]

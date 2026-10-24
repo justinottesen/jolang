@@ -54,7 +54,7 @@ Language features should not make fast or incremental compilation impossible. In
 
 For now, the language is very small. A program is a single function, `main`, which returns the
 process's exit status. Its body can use local variables, assignment, nested blocks, integer
-arithmetic, and conversions between integer types.
+arithmetic, conversions between integer types, booleans, comparisons, and `if`.
 
 ```jo
 fn main() -> u8 {
@@ -78,6 +78,15 @@ fn main() -> u8 {
 }
 ```
 
+```jo
+fn main() -> u8 {
+    let x: u8 = 7;
+    let big = x > 5 and x != 9;
+    let y = if big { x * 2 } else { 0 };
+    if y == 14 { 0 } else { 1 }
+}
+```
+
 ### Lexical structure
 
 Source files are UTF-8, using the `.jo` extension.
@@ -87,10 +96,11 @@ Source files are UTF-8, using the `.jo` extension.
 | Whitespace  | Space, tab, `\n`, `\r`. Not significant.                       |
 | Comment     | `//` to the end of the line.                                   |
 | Identifier  | `[A-Za-z_][A-Za-z0-9_]*` (ASCII only for now).                 |
-| Keyword     | `fn` `let` `mut` `as`                                          |
+| Keyword     | `fn` `let` `mut` `as` `if` `else` `true` `false` `and` `or`    |
 | Integer     | `[0-9]+` (decimal only for now).                               |
 | Punctuation | `(` `)` `{` `}` `->` `;` `:` `=`                               |
-| Operator    | `+` `-` `*` `/` `%` `+%` `-%` `*%` `as%`                       |
+| Operator    | `+` `-` `*` `/` `%` `+%` `-%` `*%` `as%` `!`                   |
+|             | `==` `!=` `<` `<=` `>` `>=`                                    |
 
 Operators ending in `%` are single tokens: `a +% b` is wrapping addition, while `a + %b` is a syntax
 error.
@@ -108,24 +118,29 @@ type     = IDENT | "(" ")" ;
 block    = "{" stmt* expr? "}" ;
 stmt     = "let" "mut"? IDENT ( ":" type )? "=" expr ";"
          | expr ";"
-         | block ;                       (* a block-like expression needs no `;` *)
+         | block | if_expr ;             (* a block-like expression needs no `;` *)
 expr     = binary ( "=" expr )? ;        (* assignment *)
 binary   = cast ( binary_op cast )* ;    (* see the precedence table *)
 cast     = unary ( ( "as" | "as%" ) type )* ;
-unary    = ( "-" | "-%" ) unary | primary ;
-primary  = INTEGER | IDENT | block | "(" expr ")" | "(" ")" ;
-binary_op = "*" | "/" | "%" | "*%" | "+" | "-" | "+%" | "-%" ;
+unary    = ( "-" | "-%" | "!" ) unary | primary ;
+primary  = INTEGER | "true" | "false" | IDENT | block | if_expr | "(" expr ")" | "(" ")" ;
+if_expr  = "if" expr block ( "else" ( if_expr | block ) )? ;
+binary_op = "*" | "/" | "%" | "*%" | "+" | "-" | "+%" | "-%"
+          | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" ;
 ```
 
 Operator precedence, from tightest to loosest:
 
-| Operators                  | Associativity |
-|----------------------------|---------------|
-| unary `-` `-%`             |               |
-| `as` `as%`                 | left          |
-| `*` `/` `%` `*%`           | left          |
-| `+` `-` `+%` `-%`          | left          |
-| `=`                        | right         |
+| Operators                       | Associativity                |
+|---------------------------------|------------------------------|
+| unary `-` `-%` `!`              |                              |
+| `as` `as%`                      | left                         |
+| `*` `/` `%` `*%`                | left                         |
+| `+` `-` `+%` `-%`               | left                         |
+| `==` `!=` `<` `<=` `>` `>=`     | none: `a < b < c` is an error |
+| `and`                           | left                         |
+| `or`                            | left                         |
+| `=`                             | right                        |
 
 The grammar accepts more than the language allows (any number of functions, any name, any type
 name, assigning to things that aren't variables). Those restrictions are checked after parsing, so
@@ -151,9 +166,11 @@ Discarding any other value is an error, since silently ignoring a result is a co
 A way to discard a value on purpose (likely `_ = expr;`) will come with function calls, when it
 becomes useful.
 
-**Block-like expressions don't need `;`.** An expression ending in a block (for now, just a block;
-later `if`, `while`, and so on) can be used as a statement without a trailing `;`, as long as its
-type is `()`. Otherwise every `if` used as a statement would need `};` after it.
+**Block-like expressions don't need `;`.** An expression ending in a block (a block or an `if`;
+later `while` and so on) can be used as a statement without a trailing `;`, as long as its type is
+`()`. Otherwise every `if` used as a statement would need `};` after it. As in Rust, a block-like
+expression at the start of a statement is the whole statement: `if c { a } else { b } - 1` is an
+`if` statement followed by `-1`, not a subtraction.
 
 **Variables** are declared with `let`, and are immutable unless declared `let mut`. Every `let`
 must have an initializer. The type annotation is optional: without one, the variable gets the type
@@ -210,12 +227,31 @@ fail, like `u8` to `u32`, is never checked.
 afterward. For now, a trap kills the process with `SIGILL`. It will become a panic that reports a
 message and the source location.
 
+**`bool`** has two values, `true` and `false`. There is no conversion between `bool` and the
+integer types in either direction, and nothing else is "truthy": a condition must be a `bool`.
+
+**Comparisons** `==` and `!=` apply to integers and to `bool`; `<`, `<=`, `>`, and `>=` apply to
+integers only. Both operands must have the same type, and the result is a `bool`. Comparisons
+can't be chained: `a < b < c` is a syntax error, since it almost never means what it looks like.
+Write `a < b and b < c`.
+
+**`and` and `or` short-circuit**: `a and b` only evaluates `b` if `a` is `true`, and `a or b`
+only evaluates `b` if `a` is `false`. Because they decide whether code runs, they are control
+flow, and are spelled as keywords rather than symbols (as in Zig) so that reads as such. `!` is
+logical not. All three apply to `bool` only.
+
+**`if` is an expression.** `if cond { a } else { b }` evaluates the condition, which must be a
+`bool`, then the matching branch, and its value is that branch's value. Both branches must have
+the same type, which is the type of the `if`. The braces are always required, and no parentheses
+are needed around the condition. `else if` chains another `if`. An `if` without `else` has type
+`()`, so its block must have type `()` too.
+
 **`main` returns the process exit status.** The program must contain exactly one function, named
 `main`, which takes no parameters and returns `u8`. Its return value becomes the process's exit
 status. `u8` is used because Linux only keeps the low 8 bits of an exit status, and silently
 truncating a wider value would be a hidden behavior.
 
-**Built-in types.** The integer types, and `()`. The unit value is written `()`.
+**Built-in types.** The integer types, `bool`, and `()`. The unit value is written `()`.
 
 ### Errors and warnings
 
@@ -225,9 +261,14 @@ The following are compile errors in this slice:
 - A return type other than `u8` for `main`, or a type name that doesn't exist.
 - An integer literal that doesn't fit in its type (for example, `256` as a `u8`), or whose type
   can't be determined.
-- A type mismatch, such as a block with no final expression where a `u8` is expected, or
-  operands of an arithmetic operator with different types.
-- Arithmetic on `()`, negating an unsigned value, or converting anything other than an integer.
+- A type mismatch, such as a block with no final expression where a `u8` is expected, operands
+  of an operator with different types, `if` branches with different types, or a condition that
+  isn't a `bool`.
+- An `if` without `else` whose block isn't `()`.
+- Arithmetic on anything but integers, negating an unsigned value, ordering comparisons (`<` and
+  so on) on `bool`, logical operators on anything but `bool`, or converting anything other than an
+  integer.
+- Chained comparisons.
 - An expression statement whose type isn't `()`.
 - Using a variable that isn't defined, or defining a variable whose name is already in scope.
 - Assigning to a variable not declared `mut`, or to something that isn't a variable.

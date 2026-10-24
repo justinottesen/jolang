@@ -1,0 +1,5 @@
+// Nothing is "truthy": a condition must be a `bool`.
+fn main() -> u8 {
+    let x: u8 = 1;
+    if x { 1 } else { 0 }  // expect-error: expected `bool`, found `u8`
+}

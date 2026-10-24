@@ -1,0 +1,10 @@
+// expect-exit: 251
+// An `if` statement needs no `;`, and at the start of a statement it is the whole statement. So the
+// `-x` below is the block's final expression, not a subtraction from the `if` (which would be a type
+// error, since the `if` has type `()`).
+fn main() -> u8 {
+    let mut x: i8 = 0;
+    let t = true;
+    if t { x = 5 } else { x = 6 }
+    -x as% u8
+}

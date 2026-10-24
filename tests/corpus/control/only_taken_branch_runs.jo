@@ -1,0 +1,7 @@
+// expect-exit: 7
+// The branch that isn't taken doesn't run, so its division by zero doesn't trap.
+fn main() -> u8 {
+    let zero: u8 = 0;
+    let c = zero == 0;
+    if c { 7 } else { 1 / zero }
+}

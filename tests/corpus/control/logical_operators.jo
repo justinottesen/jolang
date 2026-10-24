@@ -1,0 +1,12 @@
+// expect-exit: 0
+// The truth tables of `and`, `or`, and `!`, and their precedence.
+fn main() -> u8 {
+    let t = true;
+    let f = false;
+    if !(t and t) or t and f or f and t or f and f { 1 }
+    else if !(t or t) or !(t or f) or !(f or t) or f or f { 2 }
+    else if !t or !!f { 3 }
+    // `and` binds tighter than `or`: this is `t or (f and f)`, not `(t or f) and f`.
+    else if !(t or f and f) { 4 }
+    else { 0 }
+}

@@ -25,6 +25,10 @@ pub struct Function {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Local(pub u32);
 
+/// Refers to a block within its function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockId(pub u32);
+
 impl Local {
     /// The local holding a function's return value.
     pub const RETURN: Local = Local(0);
@@ -57,6 +61,7 @@ pub struct Place {
 /// A value used by an rvalue.
 #[derive(Clone, Copy, Debug)]
 pub enum Operand {
+    /// A constant. A `bool` is 0 or 1.
     Constant { value: i128, ty: Type },
     /// The value in a place, which is left unchanged. Moving a value out of a place, which linear
     /// types will need, will be a separate operand.
@@ -78,6 +83,20 @@ pub enum Rvalue {
     /// Converts an integer operand to the result's type. If `checked`, traps when the value
     /// doesn't fit; otherwise keeps the low bits.
     Cast { checked: bool, operand: Operand },
+    /// Compares two operands of the same type, giving a `bool`.
+    Compare { op: CmpOp, lhs: Operand, rhs: Operand },
+    /// Logical not of a `bool`.
+    Not(Operand),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +112,10 @@ pub enum BinOp {
 pub enum Terminator {
     /// Returns from the function. The return value is whatever is in `_0`.
     Return,
+    /// Continues at another block.
+    Goto(BlockId),
+    /// Continues at `then_block` if the `bool` condition is true, and at `else_block` otherwise.
+    Branch { cond: Operand, then_block: BlockId, else_block: BlockId },
 }
 
 impl Ir {
@@ -120,6 +143,12 @@ impl Ir {
                 }
                 match block.terminator {
                     Terminator::Return => writeln!(out, "    return").unwrap(),
+                    Terminator::Goto(target) => writeln!(out, "    goto bb{}", target.0).unwrap(),
+                    Terminator::Branch { cond, then_block, else_block } => {
+                        let cond = dump_operand(cond);
+                        writeln!(out, "    branch({cond}) -> [true: bb{}, false: bb{}]", then_block.0, else_block.0)
+                            .unwrap();
+                    }
                 }
             }
             writeln!(out, "}}").unwrap();
@@ -134,6 +163,7 @@ fn dump_place(place: Place) -> String {
 
 fn dump_operand(operand: Operand) -> String {
     match operand {
+        Operand::Constant { value, ty: Type::Bool } => format!("const {}", value != 0),
         Operand::Constant { value, ty } => format!("const {value}_{ty}"),
         Operand::Copy(place) => format!("copy {}", dump_place(place)),
     }
@@ -158,5 +188,17 @@ fn dump_rvalue(rvalue: Rvalue, ty: Type) -> String {
         Rvalue::Cast { checked: is_checked, operand } => {
             format!("{}_cast({}) to {ty}", checked(is_checked), dump_operand(operand))
         }
+        Rvalue::Compare { op, lhs, rhs } => {
+            let op = match op {
+                CmpOp::Eq => "eq",
+                CmpOp::Ne => "ne",
+                CmpOp::Lt => "lt",
+                CmpOp::Le => "le",
+                CmpOp::Gt => "gt",
+                CmpOp::Ge => "ge",
+            };
+            format!("{op}({}, {})", dump_operand(lhs), dump_operand(rhs))
+        }
+        Rvalue::Not(operand) => format!("not({})", dump_operand(operand)),
     }
 }

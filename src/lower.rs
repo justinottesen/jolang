@@ -3,9 +3,11 @@
 //! Expressions are lowered with a destination: the place their value should be stored in. See
 //! "Lowering" in design/compiler.md.
 
-use crate::ast::{BinaryOp, UnaryOp};
+use crate::ast::{BinaryOp, BinaryOpKind, UnaryOp};
 use crate::hir::{self, Hir, Type};
-use crate::ir::{self, BinOp, Block, Ir, Local, LocalDecl, Operand, Place, Rvalue, Statement, Terminator};
+use crate::ir::{
+    self, BinOp, Block, BlockId, CmpOp, Ir, Local, LocalDecl, Operand, Place, Rvalue, Statement, Terminator,
+};
 
 /// Lowers a checked program. Lowering can't fail: the HIR is already known to be valid.
 pub fn lower(hir: &Hir) -> Ir {
@@ -18,32 +20,60 @@ fn lower_function(hir: &Hir, function: &hir::Function) -> ir::Function {
     let mut locals = vec![LocalDecl { ty: function.return_type, name: None }];
     locals.extend(function.locals.iter().map(|local| LocalDecl { ty: local.ty, name: Some(local.name) }));
 
-    let mut builder = FunctionBuilder { hir, locals, blocks: Vec::new(), statements: Vec::new() };
+    let entry = BlockData { statements: Vec::new(), terminator: None };
+    let mut builder = FunctionBuilder { hir, locals, blocks: vec![entry], current: BlockId(0) };
     builder.lower_expr_into(function.body, Some(Place { local: Local::RETURN }));
-    builder.finish_block(Terminator::Return);
-    ir::Function { name: function.name, locals: builder.locals, blocks: builder.blocks }
+    builder.terminate(Terminator::Return);
+
+    let blocks = builder
+        .blocks
+        .into_iter()
+        .map(|block| Block {
+            statements: block.statements,
+            terminator: block.terminator.expect("every block is terminated"),
+        })
+        .collect();
+    ir::Function { name: function.name, locals: builder.locals, blocks }
 }
 
 /// Whether an expression can be used as an operand without evaluating anything first: a constant
 /// or a variable.
 fn is_simple(expr: &hir::Expr) -> bool {
-    matches!(expr.kind, hir::ExprKind::Integer { .. } | hir::ExprKind::Local(_))
+    matches!(expr.kind, hir::ExprKind::Integer { .. } | hir::ExprKind::Bool(_) | hir::ExprKind::Local(_))
+}
+
+/// A block being built. Its terminator is `None` until the block is finished.
+struct BlockData {
+    statements: Vec<Statement>,
+    terminator: Option<Terminator>,
 }
 
 struct FunctionBuilder<'a> {
     hir: &'a Hir,
     locals: Vec<LocalDecl>,
-    /// Blocks that have been finished.
-    blocks: Vec<Block>,
-    /// Statements of the block currently being built.
-    statements: Vec<Statement>,
+    /// Every block created so far, in order. Blocks are created before they are filled in, so a
+    /// branch can name the blocks it jumps to.
+    blocks: Vec<BlockData>,
+    /// The block that statements are currently added to.
+    current: BlockId,
 }
 
 impl FunctionBuilder<'_> {
-    /// Ends the current block with `terminator`, and starts a new one.
-    fn finish_block(&mut self, terminator: Terminator) {
-        let statements = std::mem::take(&mut self.statements);
-        self.blocks.push(Block { statements, terminator });
+    fn new_block(&mut self) -> BlockId {
+        self.blocks.push(BlockData { statements: Vec::new(), terminator: None });
+        BlockId(self.blocks.len() as u32 - 1)
+    }
+
+    /// Continues adding statements to `block`.
+    fn switch_to(&mut self, block: BlockId) {
+        self.current = block;
+    }
+
+    /// Ends the current block with `terminator`.
+    fn terminate(&mut self, terminator: Terminator) {
+        let block = &mut self.blocks[self.current.0 as usize];
+        assert!(block.terminator.is_none(), "block terminated twice");
+        block.terminator = Some(terminator);
     }
 
     fn local_place(&self, local: hir::LocalId) -> Place {
@@ -59,7 +89,7 @@ impl FunctionBuilder<'_> {
     /// Stores `value` in `place`. Storing a `()` does nothing, since it has no data.
     fn assign(&mut self, place: Place, value: Rvalue) {
         if self.locals[place.local.0 as usize].ty != Type::Unit {
-            self.statements.push(Statement::Assign { place, value });
+            self.blocks[self.current.0 as usize].statements.push(Statement::Assign { place, value });
         }
     }
 
@@ -68,13 +98,31 @@ impl FunctionBuilder<'_> {
     fn lower_expr_into(&mut self, id: hir::ExprId, destination: Option<Place>) {
         let expr = *self.hir.expr(id);
         match expr.kind {
-            hir::ExprKind::Integer { .. } | hir::ExprKind::Local(_) => {
+            hir::ExprKind::Integer { .. } | hir::ExprKind::Bool(_) | hir::ExprKind::Local(_) => {
                 if let Some(destination) = destination {
                     let operand = self.simple_operand(&expr);
                     self.assign(destination, Rvalue::Use(operand));
                 }
             }
             hir::ExprKind::Unit => {}
+            hir::ExprKind::If { cond, then_branch, else_branch } => {
+                // Each branch stores its value in the destination, then both continue at `join`.
+                let cond = self.lower_operand(cond);
+                let then_block = self.new_block();
+                let else_block = else_branch.map(|_| self.new_block());
+                let join = self.new_block();
+                self.terminate(Terminator::Branch { cond, then_block, else_block: else_block.unwrap_or(join) });
+
+                self.switch_to(then_block);
+                self.lower_expr_into(then_branch, destination);
+                self.terminate(Terminator::Goto(join));
+                if let (Some(else_block), Some(else_branch)) = (else_block, else_branch) {
+                    self.switch_to(else_block);
+                    self.lower_expr_into(else_branch, destination);
+                    self.terminate(Terminator::Goto(join));
+                }
+                self.switch_to(join);
+            }
             hir::ExprKind::Block { stmts, tail } => {
                 for stmt in self.hir.stmts(stmts) {
                     self.lower_stmt(*stmt);
@@ -100,8 +148,28 @@ impl FunctionBuilder<'_> {
             }
             hir::ExprKind::Unary { op, operand } => {
                 let operand = self.lower_operand(operand);
-                let rvalue = Rvalue::Neg { checked: op == UnaryOp::Neg, operand };
+                let rvalue = match op {
+                    UnaryOp::Neg => Rvalue::Neg { checked: true, operand },
+                    UnaryOp::WrappingNeg => Rvalue::Neg { checked: false, operand },
+                    UnaryOp::Not => Rvalue::Not(operand),
+                };
                 self.compute_into(destination, expr.ty, rvalue);
+            }
+            hir::ExprKind::Binary { op, lhs, rhs } if op.kind() == BinaryOpKind::Logical => {
+                // `a and b` is `if a { b } else { false }`, and `a or b` is `if a { true } else { b }`:
+                // the left side's value is stored, and decides whether the right side runs and
+                // replaces it.
+                let destination = destination.unwrap_or_else(|| self.new_temp(Type::Bool));
+                self.lower_expr_into(lhs, Some(destination));
+                let rhs_block = self.new_block();
+                let join = self.new_block();
+                let (then_block, else_block) = if op == BinaryOp::And { (rhs_block, join) } else { (join, rhs_block) };
+                self.terminate(Terminator::Branch { cond: Operand::Copy(destination), then_block, else_block });
+
+                self.switch_to(rhs_block);
+                self.lower_expr_into(rhs, Some(destination));
+                self.terminate(Terminator::Goto(join));
+                self.switch_to(join);
             }
             hir::ExprKind::Binary { op, lhs, rhs } => {
                 // The left operand is evaluated first. If evaluating the right one runs statements,
@@ -113,17 +181,26 @@ impl FunctionBuilder<'_> {
                     self.lower_operand_into_temp(lhs)
                 };
                 let rhs = self.lower_operand(rhs);
-                let (op, checked) = match op {
-                    BinaryOp::Add => (BinOp::Add, true),
-                    BinaryOp::Sub => (BinOp::Sub, true),
-                    BinaryOp::Mul => (BinOp::Mul, true),
-                    BinaryOp::Div => (BinOp::Div, true),
-                    BinaryOp::Rem => (BinOp::Rem, true),
-                    BinaryOp::WrappingAdd => (BinOp::Add, false),
-                    BinaryOp::WrappingSub => (BinOp::Sub, false),
-                    BinaryOp::WrappingMul => (BinOp::Mul, false),
+                let arithmetic = |op, checked| Rvalue::Binary { op, checked, lhs, rhs };
+                let compare = |op| Rvalue::Compare { op, lhs, rhs };
+                let rvalue = match op {
+                    BinaryOp::Add => arithmetic(BinOp::Add, true),
+                    BinaryOp::Sub => arithmetic(BinOp::Sub, true),
+                    BinaryOp::Mul => arithmetic(BinOp::Mul, true),
+                    BinaryOp::Div => arithmetic(BinOp::Div, true),
+                    BinaryOp::Rem => arithmetic(BinOp::Rem, true),
+                    BinaryOp::WrappingAdd => arithmetic(BinOp::Add, false),
+                    BinaryOp::WrappingSub => arithmetic(BinOp::Sub, false),
+                    BinaryOp::WrappingMul => arithmetic(BinOp::Mul, false),
+                    BinaryOp::Eq => compare(CmpOp::Eq),
+                    BinaryOp::Ne => compare(CmpOp::Ne),
+                    BinaryOp::Lt => compare(CmpOp::Lt),
+                    BinaryOp::Le => compare(CmpOp::Le),
+                    BinaryOp::Gt => compare(CmpOp::Gt),
+                    BinaryOp::Ge => compare(CmpOp::Ge),
+                    BinaryOp::And | BinaryOp::Or => unreachable!("logical operators are lowered above"),
                 };
-                self.compute_into(destination, expr.ty, Rvalue::Binary { op, checked, lhs, rhs });
+                self.compute_into(destination, expr.ty, rvalue);
             }
             hir::ExprKind::Cast { operand, wrapping } => {
                 let (Type::Int(from), Type::Int(to)) = (self.hir.expr(operand).ty, expr.ty) else {
@@ -161,6 +238,7 @@ impl FunctionBuilder<'_> {
     fn simple_operand(&self, expr: &hir::Expr) -> Operand {
         match expr.kind {
             hir::ExprKind::Integer { value } => Operand::Constant { value, ty: expr.ty },
+            hir::ExprKind::Bool(value) => Operand::Constant { value: value.into(), ty: Type::Bool },
             hir::ExprKind::Local(local) => Operand::Copy(self.local_place(local)),
             _ => unreachable!("not a simple expression"),
         }
@@ -202,6 +280,94 @@ mod tests {
         let (hir, diagnostics) = checker::check(&ast, file, &sources, &mut symbols);
         assert!(diagnostics.is_empty(), "unexpected check diagnostics: {diagnostics:?}");
         lower(&hir.unwrap()).dump(&symbols)
+    }
+
+    /// Lowers `body` as the body of `main`, and returns just its blocks.
+    fn blocks(body: &str) -> String {
+        let ir = lower_str(&format!("fn main() -> u8 {{ {body} }}"));
+        let lines: Vec<&str> = ir.lines().skip_while(|line| *line != "  bb0:").collect();
+        lines[..lines.len() - 1].iter().map(|line| line.trim()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn if_else() {
+        let expected = "\
+bb0:
+_1 = const true
+branch(copy _1) -> [true: bb1, false: bb2]
+bb1:
+_0 = const 1_u8
+goto bb3
+bb2:
+_0 = const 2_u8
+goto bb3
+bb3:
+return";
+        assert_eq!(blocks("let c = true; if c { 1 } else { 2 }"), expected);
+    }
+
+    #[test]
+    fn if_without_else_skips_to_join() {
+        let expected = "\
+bb0:
+_1 = const 0_u8
+_2 = const false
+branch(copy _2) -> [true: bb1, false: bb2]
+bb1:
+_1 = const 1_u8
+goto bb2
+bb2:
+_0 = copy _1
+return";
+        assert_eq!(blocks("let mut x: u8 = 0; let c = false; if c { x = 1 } x"), expected);
+    }
+
+    #[test]
+    fn and_short_circuits() {
+        // The right side only runs if the left side is true.
+        let expected = "\
+bb0:
+_1 = const 1_u8
+_2 = gt(copy _1, const 0_u8)
+branch(copy _2) -> [true: bb1, false: bb2]
+bb1:
+_2 = lt(copy _1, const 9_u8)
+goto bb2
+bb2:
+branch(copy _2) -> [true: bb3, false: bb4]
+bb3:
+_0 = const 1_u8
+goto bb5
+bb4:
+_0 = const 0_u8
+goto bb5
+bb5:
+return";
+        assert_eq!(blocks("let x: u8 = 1; if x > 0 and x < 9 { 1 } else { 0 }"), expected);
+    }
+
+    #[test]
+    fn or_short_circuits() {
+        // The right side only runs if the left side is false.
+        let expected = "\
+bb0:
+_1 = const true
+_2 = copy _1
+branch(copy _2) -> [true: bb2, false: bb1]
+bb1:
+_2 = not(copy _1)
+goto bb2
+bb2:
+branch(copy _2) -> [true: bb3, false: bb4]
+bb3:
+_0 = const 1_u8
+goto bb5
+bb4:
+_0 = const 0_u8
+goto bb5
+bb5:
+return";
+        assert_eq!(blocks("let a = true; let b = a or !a; if b { 1 } else { 0 }"), expected);
     }
 
     /// Lowers `body` as the body of `main`, and returns just its statements.

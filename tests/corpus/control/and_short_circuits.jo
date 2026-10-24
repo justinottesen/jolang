@@ -1,0 +1,7 @@
+// expect-exit: 0
+// If the left side of `and` is false, the right side doesn't run, so this doesn't trap.
+fn main() -> u8 {
+    let zero: u8 = 0;
+    let result = false and 1 / zero == 1;
+    if result { 1 } else { 0 }
+}

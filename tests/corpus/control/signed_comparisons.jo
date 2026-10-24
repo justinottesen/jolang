@@ -1,0 +1,15 @@
+// expect-exit: 0
+// Signed comparisons treat negative values as smaller than positive ones.
+fn main() -> u8 {
+    let minus_one: i8 = -1;
+    let one: i8 = 1;
+    let min: i64 = -9223372036854775808;
+    let max: i64 = 9223372036854775807;
+    if !(minus_one < one) { 1 }
+    else if !(one > minus_one) { 2 }
+    else if !(min < max) { 3 }
+    else if !(min <= min and min >= min) { 4 }
+    else if minus_one > one or minus_one >= one { 5 }
+    else if !(minus_one < 0 and one > 0) { 6 }
+    else { 0 }
+}

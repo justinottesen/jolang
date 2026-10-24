@@ -1,7 +1,7 @@
 //! Builds an AST from tokens by recursive descent: each grammar rule in design/language.md is one
 //! function, which consumes the tokens for that rule.
 
-use crate::ast::{Ast, BinaryOp, Expr, ExprId, ExprKind, FnDecl, Ident, Stmt, TypeExpr, UnaryOp};
+use crate::ast::{Ast, BinaryOp, BinaryOpKind, Expr, ExprId, ExprKind, FnDecl, Ident, Stmt, TypeExpr, UnaryOp};
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Token, TokenKind};
 use crate::source::Span;
@@ -57,7 +57,7 @@ impl Parser<'_> {
     }
 
     // block = "{" stmt* expr? "}" ;
-    // stmt  = let_stmt | expr ";" | block ;
+    // stmt  = let_stmt | expr ";" | block | if_expr ;
     //
     // An expression followed by `}` is the block's final expression, not a statement.
     fn parse_block(&mut self) -> ParseResult<ExprId> {
@@ -73,10 +73,13 @@ impl Parser<'_> {
                 _ => {}
             }
 
-            // A block at the start of a statement ends the statement, so `{ ... } = 1` is not an
-            // assignment. Rust parses it the same way.
-            let block_like = self.peek().kind == TokenKind::LBrace;
-            let expr = if block_like { self.parse_block()? } else { self.parse_expr()? };
+            // A block-like expression at the start of a statement ends the statement, so
+            // `{ ... } = 1` is not an assignment. Rust parses it the same way.
+            let (expr, block_like) = match self.peek().kind {
+                TokenKind::LBrace => (self.parse_block()?, true),
+                TokenKind::If => (self.parse_if()?, true),
+                _ => (self.parse_expr()?, false),
+            };
             match self.peek().kind {
                 TokenKind::Semicolon => {
                     self.advance();
@@ -136,6 +139,13 @@ impl Parser<'_> {
             let rhs = self.parse_binary(precedence + 1)?;
             let span = self.span_of(lhs).to(self.span_of(rhs));
             lhs = self.ast.add_expr(Expr { kind: ExprKind::Binary { op, lhs, rhs }, span });
+
+            // Comparisons don't associate at all: `a < b < c` is an error.
+            if is_comparison(op) && binary_op(self.peek().kind).is_some_and(|(next, _)| is_comparison(next)) {
+                let message = "comparisons can't be chained; to compare with both sides, use `and`, as in \
+                               `a < b and b < c`";
+                return Err(Diagnostic::error(message, self.peek().span));
+            }
         }
         Ok(lhs)
     }
@@ -156,11 +166,12 @@ impl Parser<'_> {
         }
     }
 
-    // unary = ( "-" | "-%" ) unary | primary ;
+    // unary = ( "-" | "-%" | "!" ) unary | primary ;
     fn parse_unary(&mut self) -> ParseResult<ExprId> {
         let op = match self.peek().kind {
             TokenKind::Minus => UnaryOp::Neg,
             TokenKind::MinusPercent => UnaryOp::WrappingNeg,
+            TokenKind::Bang => UnaryOp::Not,
             _ => return self.parse_primary(),
         };
         let op_token = self.advance();
@@ -169,18 +180,38 @@ impl Parser<'_> {
         Ok(self.ast.add_expr(Expr { kind: ExprKind::Unary { op, operand }, span }))
     }
 
-    // primary = INTEGER | IDENT | block | "(" expr ")" | "(" ")" ;
+    // primary = INTEGER | "true" | "false" | IDENT | block | if_expr | "(" expr ")" | "(" ")" ;
     fn parse_primary(&mut self) -> ParseResult<ExprId> {
         let token = self.peek();
         let kind = match token.kind {
             TokenKind::Integer => ExprKind::Integer,
+            TokenKind::True => ExprKind::Bool(true),
+            TokenKind::False => ExprKind::Bool(false),
             TokenKind::Ident => ExprKind::Name(Ident { span: token.span }),
             TokenKind::LBrace => return self.parse_block(),
+            TokenKind::If => return self.parse_if(),
             TokenKind::LParen => return self.parse_parenthesized(),
             _ => return Err(self.error_expected("expression")),
         };
         self.advance();
         Ok(self.ast.add_expr(Expr { kind, span: token.span }))
+    }
+
+    // if_expr = "if" expr block ( "else" ( if_expr | block ) )? ;
+    fn parse_if(&mut self) -> ParseResult<ExprId> {
+        let if_token = self.expect(TokenKind::If)?;
+        let cond = self.parse_expr()?;
+        let then_branch = self.parse_block()?;
+        let else_branch = match self.eat(TokenKind::Else) {
+            None => None,
+            Some(_) => Some(match self.peek().kind {
+                TokenKind::If => self.parse_if()?,
+                TokenKind::LBrace => self.parse_block()?,
+                _ => return Err(self.error_expected("`{` or `if`")),
+            }),
+        };
+        let span = if_token.span.to(self.span_of(else_branch.unwrap_or(then_branch)));
+        Ok(self.ast.add_expr(Expr { kind: ExprKind::If { cond, then_branch, else_branch }, span }))
     }
 
     /// Parses `()`, or an expression in parentheses. Parentheses only group, so they don't appear
@@ -265,17 +296,29 @@ impl Parser<'_> {
 /// The binary operator a token stands for, and its precedence. Higher numbers bind more tightly.
 fn binary_op(kind: TokenKind) -> Option<(BinaryOp, u8)> {
     let op = match kind {
-        TokenKind::Star => (BinaryOp::Mul, 2),
-        TokenKind::Slash => (BinaryOp::Div, 2),
-        TokenKind::Percent => (BinaryOp::Rem, 2),
-        TokenKind::StarPercent => (BinaryOp::WrappingMul, 2),
-        TokenKind::Plus => (BinaryOp::Add, 1),
-        TokenKind::Minus => (BinaryOp::Sub, 1),
-        TokenKind::PlusPercent => (BinaryOp::WrappingAdd, 1),
-        TokenKind::MinusPercent => (BinaryOp::WrappingSub, 1),
+        TokenKind::Star => (BinaryOp::Mul, 5),
+        TokenKind::Slash => (BinaryOp::Div, 5),
+        TokenKind::Percent => (BinaryOp::Rem, 5),
+        TokenKind::StarPercent => (BinaryOp::WrappingMul, 5),
+        TokenKind::Plus => (BinaryOp::Add, 4),
+        TokenKind::Minus => (BinaryOp::Sub, 4),
+        TokenKind::PlusPercent => (BinaryOp::WrappingAdd, 4),
+        TokenKind::MinusPercent => (BinaryOp::WrappingSub, 4),
+        TokenKind::EqEq => (BinaryOp::Eq, 3),
+        TokenKind::NotEq => (BinaryOp::Ne, 3),
+        TokenKind::Lt => (BinaryOp::Lt, 3),
+        TokenKind::Le => (BinaryOp::Le, 3),
+        TokenKind::Gt => (BinaryOp::Gt, 3),
+        TokenKind::Ge => (BinaryOp::Ge, 3),
+        TokenKind::And => (BinaryOp::And, 2),
+        TokenKind::Or => (BinaryOp::Or, 1),
         _ => return None,
     };
     Some(op)
+}
+
+fn is_comparison(op: BinaryOp) -> bool {
+    matches!(op.kind(), BinaryOpKind::Equality | BinaryOpKind::Ordering)
 }
 
 #[cfg(test)]
@@ -432,6 +475,46 @@ mod tests {
         assert_eq!(grouping("a as u16 as% u8"), "((a as u16) as% u8)");
         assert_eq!(grouping("x = a + b"), "(x = (a + b))");
         assert_eq!(grouping("x = y = a"), "(x = (y = a))");
+        assert_eq!(grouping("a + 1 < b * 2"), "((a + 1) < (b * 2))");
+        assert_eq!(grouping("a < b and c == d or e"), "(((a < b) and (c == d)) or e)");
+        assert_eq!(grouping("a or b and c"), "(a or (b and c))");
+        assert_eq!(grouping("a and b and c"), "((a and b) and c)");
+        assert_eq!(grouping("!a and !b"), "((!a) and (!b))");
+        assert_eq!(grouping("x = a == b"), "(x = (a == b))");
+    }
+
+    #[test]
+    fn if_expressions() {
+        let expected = "  \
+  block
+    let `x`
+      if
+        name `c`
+        block
+          integer `1`
+        if
+          name `d`
+          block
+            integer `2`
+          block
+            integer `3`
+    statement (no `;`)
+      if
+        name `c`
+        block
+          assign
+            name `y`
+            integer `4`
+    name `x`";
+        assert_eq!(
+            dump_body("{ let x = if c { 1 } else if d { 2 } else { 3 }; if c { y = 4 } x }"),
+            expected
+        );
+    }
+
+    #[test]
+    fn bool_literals() {
+        assert_eq!(grouping("true and false"), "(true and false)");
     }
 
     #[test]
@@ -510,6 +593,18 @@ mod tests {
             ("fn main() -> u8 { x as }", "expected type, found `}`"),
             ("fn main() -> u8 { x as 5 }", "expected type, found integer `5`"),
             ("fn main() -> u8 { a + %b }", "expected expression, found `%`"),
+            (
+                "fn main() -> u8 { a < b < c }",
+                "comparisons can't be chained; to compare with both sides, use `and`, as in `a < b and b < c`",
+            ),
+            (
+                "fn main() -> u8 { a == b != c }",
+                "comparisons can't be chained; to compare with both sides, use `and`, as in `a < b and b < c`",
+            ),
+            ("fn main() -> u8 { if c 1 }", "expected `{`, found integer `1`"),
+            ("fn main() -> u8 { if { 1 } }", "expected `{`, found `}`"),
+            ("fn main() -> u8 { if c { 1 } else 2 }", "expected `{` or `if`, found integer `2`"),
+            ("fn main() -> u8 { else { 1 } }", "expected expression, found `else`"),
         ];
         for (text, message) in cases {
             assert_eq!(parse_error(text).message, message, "for {text:?}");

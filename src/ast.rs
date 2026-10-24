@@ -83,6 +83,11 @@ pub enum ExprKind {
     Name(Ident),
     /// `()`, the unit value.
     Unit,
+    /// `true` or `false`.
+    Bool(bool),
+    /// `if cond { ... } else ...`. `then_branch` is a block; `else_branch` is a block or another
+    /// `if`.
+    If { cond: ExprId, then_branch: ExprId, else_branch: Option<ExprId> },
     /// A block: statements, then optionally a final expression that gives the block its value.
     Block { stmts: StmtRange, tail: Option<ExprId> },
     /// `target = value`.
@@ -99,6 +104,8 @@ pub enum UnaryOp {
     Neg,
     /// `-%`, which wraps on overflow.
     WrappingNeg,
+    /// `!`, logical not.
+    Not,
 }
 
 impl UnaryOp {
@@ -106,8 +113,22 @@ impl UnaryOp {
         match self {
             UnaryOp::Neg => "-",
             UnaryOp::WrappingNeg => "-%",
+            UnaryOp::Not => "!",
         }
     }
+}
+
+/// What kind of operation a binary operator is, which determines its operand and result types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOpKind {
+    /// Integer operands, integer result.
+    Arithmetic,
+    /// `==` and `!=`: integer or `bool` operands, `bool` result.
+    Equality,
+    /// `<` and friends: integer operands, `bool` result.
+    Ordering,
+    /// `and` and `or`: `bool` operands and result. These short-circuit.
+    Logical,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +141,14 @@ pub enum BinaryOp {
     WrappingAdd,
     WrappingSub,
     WrappingMul,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
 }
 
 impl BinaryOp {
@@ -133,6 +162,30 @@ impl BinaryOp {
             BinaryOp::WrappingAdd => "+%",
             BinaryOp::WrappingSub => "-%",
             BinaryOp::WrappingMul => "*%",
+            BinaryOp::Eq => "==",
+            BinaryOp::Ne => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Le => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Ge => ">=",
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+        }
+    }
+
+    pub fn kind(self) -> BinaryOpKind {
+        match self {
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Rem
+            | BinaryOp::WrappingAdd
+            | BinaryOp::WrappingSub
+            | BinaryOp::WrappingMul => BinaryOpKind::Arithmetic,
+            BinaryOp::Eq | BinaryOp::Ne => BinaryOpKind::Equality,
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => BinaryOpKind::Ordering,
+            BinaryOp::And | BinaryOp::Or => BinaryOpKind::Logical,
         }
     }
 }
@@ -197,6 +250,15 @@ impl Ast {
                 }
             }
             ExprKind::Unit => dump_line(out, depth, "unit", expr.span, sources),
+            ExprKind::Bool(value) => dump_line(out, depth, &format!("bool `{value}`"), expr.span, sources),
+            ExprKind::If { cond, then_branch, else_branch } => {
+                dump_line(out, depth, "if", expr.span, sources);
+                self.dump_expr(out, depth + 1, cond, sources);
+                self.dump_expr(out, depth + 1, then_branch, sources);
+                if let Some(else_branch) = else_branch {
+                    self.dump_expr(out, depth + 1, else_branch, sources);
+                }
+            }
             ExprKind::Assign { target, value } => {
                 dump_line(out, depth, "assign", expr.span, sources);
                 self.dump_expr(out, depth + 1, target, sources);

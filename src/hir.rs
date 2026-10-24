@@ -36,6 +36,7 @@ pub struct LocalId(pub u32);
 pub enum Type {
     /// `()`: one value, carrying no information.
     Unit,
+    Bool,
     Int(IntType),
 }
 
@@ -76,6 +77,7 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Type::Unit => f.write_str("()"),
+            Type::Bool => f.write_str("bool"),
             Type::Int(int) => int.fmt(f),
         }
     }
@@ -122,15 +124,20 @@ pub enum ExprKind {
     Integer { value: i128 },
     /// The unit value, `()`.
     Unit,
+    Bool(bool),
+    /// Evaluates `cond`, then one branch. Without an `else`, the expression has type `()`.
+    If { cond: ExprId, then_branch: ExprId, else_branch: Option<ExprId> },
     /// Reads a local variable. As the target of an assignment, refers to the variable instead.
     Local(LocalId),
     /// Statements, then optionally a final expression that gives the block its value.
     Block { stmts: StmtRange, tail: Option<ExprId> },
     /// Stores `value` in `target`, which is always a `Local` expression for now.
     Assign { target: ExprId, value: ExprId },
-    /// Negation. The operand has the same type as the expression, which is a signed integer.
+    /// Negation of a signed integer, or logical not of a `bool`. The operand has the expression's
+    /// type.
     Unary { op: UnaryOp, operand: ExprId },
-    /// Arithmetic. Both operands have the same integer type as the expression.
+    /// A binary operator. Both operands have the same type: the expression's type for arithmetic
+    /// and logical operators, and an integer or `bool` for comparisons, whose result is `bool`.
     Binary { op: BinaryOp, lhs: ExprId, rhs: ExprId },
     /// Converts an integer to the expression's type: `as%` if `wrapping`, otherwise `as`.
     Cast { operand: ExprId, wrapping: bool },
@@ -202,6 +209,8 @@ impl Dumper<'_> {
             ExprKind::Integer { value } => format!("integer {value}"),
             ExprKind::Local(local) => format!("local `{}`", self.local_name(local)),
             ExprKind::Unit => "unit".to_string(),
+            ExprKind::Bool(value) => format!("bool {value}"),
+            ExprKind::If { .. } => "if".to_string(),
             ExprKind::Block { .. } => "block".to_string(),
             ExprKind::Assign { .. } => "assign".to_string(),
             ExprKind::Unary { op, .. } => format!("unary `{}`", op.symbol()),
@@ -210,7 +219,14 @@ impl Dumper<'_> {
         };
         self.line(depth, &format!("{label}: {}", expr.ty), expr.span);
         match expr.kind {
-            ExprKind::Integer { .. } | ExprKind::Unit | ExprKind::Local(_) => {}
+            ExprKind::Integer { .. } | ExprKind::Unit | ExprKind::Bool(_) | ExprKind::Local(_) => {}
+            ExprKind::If { cond, then_branch, else_branch } => {
+                self.expr(depth + 1, cond);
+                self.expr(depth + 1, then_branch);
+                if let Some(else_branch) = else_branch {
+                    self.expr(depth + 1, else_branch);
+                }
+            }
             ExprKind::Unary { operand, .. } | ExprKind::Cast { operand, .. } => self.expr(depth + 1, operand),
             ExprKind::Binary { lhs, rhs, .. } => {
                 self.expr(depth + 1, lhs);

@@ -48,14 +48,24 @@ pub enum Operand {
 pub enum Cond {
     /// Unsigned greater than.
     Above,
+    /// Unsigned greater than or equal.
+    AboveEqual,
+    /// Unsigned less than.
+    Below,
+    /// Unsigned less than or equal.
+    BelowEqual,
     /// The carry flag: unsigned overflow.
     Carry,
     Equal,
     NotEqual,
     /// Signed greater than.
     Greater,
+    /// Signed greater than or equal.
+    GreaterEqual,
     /// Signed less than.
     Less,
+    /// Signed less than or equal.
+    LessEqual,
     /// The overflow flag: signed overflow.
     Overflow,
     /// The sign flag: the result was negative.
@@ -94,6 +104,9 @@ pub enum Inst {
     Call(String),
     /// Jumps to the label if the condition holds.
     Jcc(Cond, String),
+    Jmp(String),
+    /// Sets a byte register to 1 if the condition holds, and 0 otherwise.
+    Setcc(Cond, Operand),
     Ret,
     Syscall,
     /// An undefined instruction, which makes the CPU raise an exception. Linux kills the process
@@ -155,24 +168,33 @@ fn print_inst(out: &mut String, inst: &Inst) {
         Inst::Push(reg) => format!("push {}", reg_name(*reg, Size::Qword)),
         Inst::Pop(reg) => format!("pop {}", reg_name(*reg, Size::Qword)),
         Inst::Call(target) => format!("call {target}"),
-        Inst::Jcc(cond, target) => {
-            let suffix = match cond {
-                Cond::Above => "a",
-                Cond::Carry => "c",
-                Cond::Equal => "e",
-                Cond::NotEqual => "ne",
-                Cond::Greater => "g",
-                Cond::Less => "l",
-                Cond::Overflow => "o",
-                Cond::Sign => "s",
-            };
-            format!("j{suffix} {target}")
-        }
+        Inst::Jcc(cond, target) => format!("j{} {target}", cond_suffix(*cond)),
+        Inst::Jmp(target) => format!("jmp {target}"),
+        Inst::Setcc(cond, dst) => format!("set{} {}", cond_suffix(*cond), operand(*dst)),
         Inst::Ret => "ret".to_string(),
         Inst::Syscall => "syscall".to_string(),
         Inst::Ud2 => "ud2".to_string(),
     };
     writeln!(out, "    {text}").unwrap();
+}
+
+/// The suffix that names a condition in `jcc` and `setcc` instructions.
+fn cond_suffix(cond: Cond) -> &'static str {
+    match cond {
+        Cond::Above => "a",
+        Cond::AboveEqual => "ae",
+        Cond::Below => "b",
+        Cond::BelowEqual => "be",
+        Cond::Carry => "c",
+        Cond::Equal => "e",
+        Cond::NotEqual => "ne",
+        Cond::Greater => "g",
+        Cond::GreaterEqual => "ge",
+        Cond::Less => "l",
+        Cond::LessEqual => "le",
+        Cond::Overflow => "o",
+        Cond::Sign => "s",
+    }
 }
 
 fn operand(operand: Operand) -> String {

@@ -1,0 +1,7 @@
+// expect-trap
+// If the left side of `and` is true, the right side runs, and here it traps.
+fn main() -> u8 {
+    let zero: u8 = 0;
+    let result = true and 1 / zero == 1;
+    if result { 1 } else { 0 }
+}

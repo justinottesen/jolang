@@ -1,0 +1,11 @@
+// expect-exit: 0
+// An `if` without `else` has type `()`, and runs its block only if the condition is true.
+fn main() -> u8 {
+    let mut count: u8 = 0;
+    let t = true;
+    let f = false;
+    if t { count = count + 1; }
+    if f { count = count + 10; }
+    if t { count = count + 100 }
+    if count != 101 { 1 } else { 0 }
+}

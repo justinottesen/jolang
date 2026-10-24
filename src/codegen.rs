@@ -7,7 +7,7 @@
 use crate::asm::{self, Cond, Inst, Operand, Reg, Size};
 use crate::hir::{IntType, Type};
 use crate::intern::Interner;
-use crate::ir::{self, BinOp, Ir, Local, LocalDecl, Place, Rvalue, Statement, Terminator};
+use crate::ir::{self, BinOp, BlockId, CmpOp, Ir, Local, LocalDecl, Place, Rvalue, Statement, Terminator};
 
 /// Generates the whole program: an entry point, plus every function in the IR.
 pub fn generate(ir: &Ir, symbols: &Interner) -> Vec<asm::Function> {
@@ -36,6 +36,7 @@ fn linux_entry_point() -> asm::Function {
 fn value_size(ty: Type) -> Option<Size> {
     match ty {
         Type::Unit => None,
+        Type::Bool => Some(Size::Byte),
         Type::Int(int) => Some(int_size(int)),
     }
 }
@@ -61,10 +62,12 @@ fn is_narrow(int: IntType) -> bool {
     int.bits < 32
 }
 
+/// The integer type a value is handled as in registers. A `bool` is an unsigned byte holding 0 or 1.
 fn int_type(ty: Type) -> IntType {
     match ty {
         Type::Int(int) => int,
-        Type::Unit => unreachable!("arithmetic on `()`"),
+        Type::Bool => IntType { signed: false, bits: 8 },
+        Type::Unit => unreachable!("no instruction reads or writes `()`"),
     }
 }
 
@@ -134,14 +137,35 @@ impl FunctionGenerator<'_> {
         }
 
         for (i, block) in self.function.blocks.iter().enumerate() {
-            self.push(Inst::Label(format!(".L{}.bb{i}", self.name)));
+            self.push(Inst::Label(self.block_label(BlockId(i as u32))));
             for statement in &block.statements {
                 match *statement {
                     Statement::Assign { place, value } => self.assign(place, value),
                 }
             }
+            // Blocks are laid out in order, so jumping to the next block isn't needed: execution
+            // falls through to it.
+            let next = BlockId(i as u32 + 1);
             match block.terminator {
                 Terminator::Return => self.ret(),
+                Terminator::Goto(target) => {
+                    if target != next {
+                        self.push(Inst::Jmp(self.block_label(target)));
+                    }
+                }
+                Terminator::Branch { cond, then_block, else_block } => {
+                    let al = reg(Reg::Rax, Size::Byte);
+                    self.load(Reg::Rax, cond, Size::Byte);
+                    self.push(Inst::Test { lhs: al, rhs: al });
+                    if then_block == next {
+                        self.push(Inst::Jcc(Cond::Equal, self.block_label(else_block)));
+                    } else {
+                        self.push(Inst::Jcc(Cond::NotEqual, self.block_label(then_block)));
+                        if else_block != next {
+                            self.push(Inst::Jmp(self.block_label(else_block)));
+                        }
+                    }
+                }
             }
         }
 
@@ -154,6 +178,10 @@ impl FunctionGenerator<'_> {
 
     fn push(&mut self, inst: Inst) {
         self.insts.push(inst);
+    }
+
+    fn block_label(&self, block: BlockId) -> String {
+        format!(".L{}.bb{}", self.name, block.0)
     }
 
     fn trap_label(&self) -> String {
@@ -233,8 +261,37 @@ impl FunctionGenerator<'_> {
                 }
             }
             Rvalue::Cast { checked, operand } => self.cast(ty, checked, operand),
+            Rvalue::Compare { op, lhs, rhs } => self.compare(op, lhs, rhs),
+            Rvalue::Not(operand) => {
+                // A `bool` is 0 or 1, so flipping the lowest bit negates it.
+                let al = reg(Reg::Rax, Size::Byte);
+                self.load(Reg::Rax, operand, Size::Byte);
+                self.push(Inst::Xor { dst: al, src: Operand::Imm(1) });
+            }
         }
         self.store(place, Reg::Rax);
+    }
+
+    /// Compares two operands, leaving the `bool` result in `al`.
+    fn compare(&mut self, op: CmpOp, lhs: ir::Operand, rhs: ir::Operand) {
+        let ty = int_type(self.operand_type(lhs));
+        let width = work_size(ty);
+        self.load(Reg::Rax, lhs, width);
+        self.load(Reg::Rcx, rhs, width);
+        self.push(Inst::Cmp { lhs: reg(Reg::Rax, width), rhs: reg(Reg::Rcx, width) });
+        let cond = match (op, ty.signed) {
+            (CmpOp::Eq, _) => Cond::Equal,
+            (CmpOp::Ne, _) => Cond::NotEqual,
+            (CmpOp::Lt, true) => Cond::Less,
+            (CmpOp::Le, true) => Cond::LessEqual,
+            (CmpOp::Gt, true) => Cond::Greater,
+            (CmpOp::Ge, true) => Cond::GreaterEqual,
+            (CmpOp::Lt, false) => Cond::Below,
+            (CmpOp::Le, false) => Cond::BelowEqual,
+            (CmpOp::Gt, false) => Cond::Above,
+            (CmpOp::Ge, false) => Cond::AboveEqual,
+        };
+        self.push(Inst::Setcc(cond, reg(Reg::Rax, Size::Byte)));
     }
 
     /// Computes a binary operation on values of type `ty`, leaving the result in `rax`.

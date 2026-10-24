@@ -1,0 +1,5 @@
+fn main() -> u8 {
+    let c = true;
+    if c { 5 }  // expect-error: expected `()`, found integer `5`
+    0
+}

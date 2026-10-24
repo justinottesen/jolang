@@ -1,0 +1,8 @@
+// expect-exit: 0
+// The `if` example from design/language.md.
+fn main() -> u8 {
+    let x: u8 = 7;
+    let big = x > 5 and x != 9;
+    let y = if big { x * 2 } else { 0 };
+    if y == 14 { 0 } else { 1 }
+}

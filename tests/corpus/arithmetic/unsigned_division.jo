@@ -1,5 +1,11 @@
-// expect-exit: 32
+// expect-exit: 0
 fn main() -> u8 {
     let a: u8 = 17;
-    (a / 5) * 10 + a % 5        // 3 * 10 + 2
+    let b: u64 = 18446744073709551615;
+    if a / 5 != 3 { 1 }
+    else if a % 5 != 2 { 2 }
+    else if a / 17 != 1 or a % 17 != 0 { 3 }
+    else if b / 2 != 9223372036854775807 { 4 }
+    else if b % 10 != 5 { 5 }
+    else { 0 }
 }

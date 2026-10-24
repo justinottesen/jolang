@@ -1,0 +1,10 @@
+// expect-exit: 0
+fn main() -> u8 {
+    let t = true;
+    let f = false;
+    if !(t == true and f == false) { 1 }
+    else if !(t != f) { 2 }
+    else if t == f { 3 }
+    else if !(!t == f) { 4 }
+    else { 0 }
+}

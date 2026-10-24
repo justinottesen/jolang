@@ -1,0 +1,4 @@
+fn main() -> u8 {
+    let c = true;
+    if c { 1 }  // expect-error: expected `u8`, found `()`, because this `if` has no `else`
+}
